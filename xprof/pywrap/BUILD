@@ -26,19 +26,25 @@ cc_binary(
     ] + select({
         ":dbg_build": ["-g"],
         "//conditions:default": [],
+    }) + select({
+        "//:llo_analytics_enabled": ["-DLLO_ANALYTICS_ENABLED"],
+        "//conditions:default": [],
     }),
     linkopts = select({
         "@xla//xla/tsl:windows": [
             "/OPT:REF",  # Remove unused functions and data
             "/OPT:ICF",  # Merge identical functions
+            "/DEBUG:NONE",  # Strip all symbols
         ],
         "@xla//xla/tsl:macos": [
             "-Wl,-dead_strip",  # Remove unreferenced symbols
+            "-Wl,-S",  # Strip all symbols
         ],
         "//conditions:default": [
             "-Wl,--exclude-libs,ALL",  # Prevent exposing symbols from dependencies
             "-Wl,--gc-sections",  # Garbage collect any unused sections
             "-Wl,--icf=all",  # Merge identical functions
+            "-Wl,--strip-all",  # Strip all symbols
         ],
     }),
     linkshared = True,
@@ -54,7 +60,13 @@ cc_binary(
         "@xla//xla/pjrt:status_casters",  # buildcleaner: keep
         "@xla//xla/tsl/platform/cloud:gcs_file_system",
         "@xla//xla/tsl/profiler/rpc/client:capture_profile",
-    ],
+    ] + select({
+        "//:llo_analytics_enabled": [
+            "@org_xprof//embedded/llo_analysis:llo_analysis_c_api",
+            "@org_xprof//embedded/llo_analysis:llo_analysis_lib",
+        ],
+        "//conditions:default": [],
+    }),
 )
 
 py_library(
