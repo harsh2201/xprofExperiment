@@ -50,6 +50,31 @@ op-profile .ops-control .mat-mdc-form-field {
   box-shadow: 0 0 1px rgba(255, 255, 255, 0.5);
 }
 
+.category-filter-panel {
+  max-width: unset !important;
+  overflow-x: auto !important;
+}
+
+.category-filter-panel.mat-mdc-select-panel,
+.category-filter-panel.mat-select-panel {
+  /* stylelint-disable-next-line declaration-no-important -- legacy code */
+  max-width: unset !important;
+  /* stylelint-disable-next-line declaration-no-important -- legacy code */
+  overflow-x: auto !important;
+}
+
+.category-filter-panel mat-option,
+.category-filter-panel .mat-mdc-option {
+  /* stylelint-disable-next-line declaration-no-important -- legacy code */
+  white-space: nowrap !important;
+  /* stylelint-disable-next-line declaration-no-important -- legacy code */
+  overflow-wrap: normal !important;
+  /* stylelint-disable-next-line declaration-no-important -- legacy code */
+  word-wrap: normal !important;
+  /* stylelint-disable-next-line declaration-no-important -- legacy code */
+  min-width: max-content !important;
+}
+
 .google-chart-table-header-cell {
   word-wrap: break-word;
   background-color: #fff;

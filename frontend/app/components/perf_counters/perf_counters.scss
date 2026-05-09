@@ -11,3 +11,12 @@
 .flex-space {
   flex: 1;
 }
+
+:host ::ng-deep {
+  .table {
+    overflow-x: auto;
+  }
+  .google-chart-table-table-cell {
+    white-space: nowrap;
+  }
+}
