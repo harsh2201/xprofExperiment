@@ -42,3 +42,50 @@ diff -ruN xla-a085ce021f5d26d1ccc762543ccc56d5eace2cfb/xla/tsl/platform/cloud/BU
      deps = [
          ":http_request",
          "//xla/tsl/platform:env",
+diff -ruN a/xla/tsl/profiler/utils/xplane_schema.h b/xla/tsl/profiler/utils/xplane_schema.h
+--- a/xla/tsl/profiler/utils/xplane_schema.h
++++ b/xla/tsl/profiler/utils/xplane_schema.h
+@@ -151,6 +151,7 @@
+   kProcessBatch,
+   kBrainSessionRun,
+   kConcatInputTensors,
++  kOrbaxConcatInputBuffers,
+   kMergeInputTensors,
+   kScheduleWithoutSplit,
+   kScheduleWithSplit,
+@@ -194,7 +195,8 @@
+   kLinearize,
+   kDelinearize,
+   kTransferBufferFromDeviceFastPath,
+-  kLastHostEventType = kTransferBufferFromDeviceFastPath,
++  kOrbaxProcessBatch,
++  kLastHostEventType = kOrbaxProcessBatch,
+ };
+ 
+ enum StatType {
+diff -ruN a/xla/tsl/profiler/utils/xplane_schema.cc b/xla/tsl/profiler/utils/xplane_schema.cc
+--- a/xla/tsl/profiler/utils/xplane_schema.cc
++++ b/xla/tsl/profiler/utils/xplane_schema.cc
+@@ -153,8 +153,10 @@
+       // Batching related.
+       {"BatchingSessionRun", kBatchingSessionRun},
+       {"ProcessBatch", kProcessBatch},
++      {"OrbaxServing::ProcessBatch", kOrbaxProcessBatch},
+       {"BrainSessionRun", kBrainSessionRun},
+       {"ConcatInputTensors", kConcatInputTensors},
++      {"OrbaxServing::ConcatInputBuffers", kOrbaxConcatInputBuffers},
+       {"MergeInputTensors", kMergeInputTensors},
+       {"ScheduleWithoutSplit", kScheduleWithoutSplit},
+       {"ScheduleWithSplit", kScheduleWithSplit},
+diff -ruN a/xla/tsl/profiler/utils/preprocess_xplane.cc b/xla/tsl/profiler/utils/preprocess_xplane.cc
+--- a/xla/tsl/profiler/utils/preprocess_xplane.cc
++++ b/xla/tsl/profiler/utils/preprocess_xplane.cc
+@@ -87,6 +87,8 @@
+   mutator_factories.push_back(XplaneRootEventMutatorFactory::CreateFactory(
+       HostEventType::kProcessBatch, 2));
+   mutator_factories.push_back(XplaneRootEventMutatorFactory::CreateFactory(
++      HostEventType::kOrbaxProcessBatch, 2));
++  mutator_factories.push_back(XplaneRootEventMutatorFactory::CreateFactory(
+       HostEventType::kBatchingSessionRun, 1));
+   // Legacy asynchronous TPU execution dispatcher
+   mutator_factories.push_back(
