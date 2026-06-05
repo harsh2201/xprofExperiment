@@ -77,6 +77,8 @@ struct Group {
   int start_level = 0;
   int nesting_level = 0;
   bool expanded = false;
+  ProcessId pid = 0;
+  ThreadId tid = 0;
 };
 
 struct FlowLine {
@@ -96,31 +98,27 @@ struct FlowLine {
 // including event timing, grouping information, and mappings between levels
 // and events.
 struct FlameChartTimelineData {
-  std::vector<int> entry_levels;
+  std::vector<uint16_t> entry_levels;
   std::vector<Microseconds> entry_total_times;
   std::vector<Microseconds> entry_self_times;
   std::vector<Microseconds> entry_start_times;
-  std::vector<std::string> entry_names;
-  std::vector<EventId> entry_event_ids;
-  // TODO: b/474668991 - Check if we can fetch PID and entry args from backend
-  // instead of storing them here, to reduce memory usage.
-  // Compare latency from network to memory-heavy local storage.
-  std::vector<ProcessId> entry_pids;
-  std::vector<ThreadId> entry_tids;
-  std::vector<std::map<std::string, std::string>> entry_args;
+  std::vector<uint32_t> entry_names;
+  std::vector<std::string> interned_string_pool;
+
+  // Flattened args structure replacing entry_args map
+  std::vector<uint64_t> entry_uids;
+  std::vector<uint32_t> entry_hlo_module_indices;
+  std::vector<uint32_t> entry_hlo_op_indices;
+  std::vector<std::string> hlo_module_table;
+  std::vector<std::string> hlo_op_table;
+
   std::vector<Group> groups;
-  // A map from level to a list of event indices at that level.
-  // This is used to quickly draw events at a given level.
-  // Technically, we can calculate this in the Timeline class, but doing it here
-  // saves us from traversing all the events 2 times, though the time complexity
-  // are the same. But given there might be tens of thousands events, this
-  // optimization is worth it.
-  std::vector<std::vector<int>> events_by_level;
+  std::vector<int> level_event_indices;
+  std::vector<size_t> level_offsets;
   std::vector<FlowLine> flow_lines;
-  // Map from event_id to list of flow ids that connect to this event.
-  absl::flat_hash_map<EventId, std::vector<std::string>> flow_ids_by_event_id;
-  // Map from flow_id to list of flow lines that belong to this flow.
-  absl::flat_hash_map<std::string, std::vector<FlowLine>> flow_lines_by_flow_id;
+  // Direct mapping from event_index to flow_ids
+  absl::flat_hash_map<int, std::vector<uint64_t>> flow_ids_by_event_index;
+  absl::flat_hash_map<uint64_t, std::vector<FlowLine>> flow_lines_by_flow_id;
   // A map from group index to counter data.
   // We use group index instead of PID as the key because a process (PID) can
   // have multiple counter tracks associated with it. The group index uniquely

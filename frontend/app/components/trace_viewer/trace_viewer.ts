@@ -37,6 +37,7 @@ import {
   isDetailsReceivedEvent,
   LOADING_STATUS_UPDATE_EVENT_NAME,
   SearchEventsEventDetail,
+  shutdownTraceViewerV2,
   TraceDetailKey,
   TraceDetails,
   TraceViewerV2LoadingStatus,
@@ -116,6 +117,7 @@ function parseHostsList(hosts: unknown): string[] {
 })
 export class TraceViewer implements OnInit, AfterViewInit, OnDestroy {
   private readonly destroyed = new ReplaySubject<void>(1);
+  private isDestroyed = false;
   private navigationEvent: NavigationEvent = {};
   private readonly injector = inject(Injector);
   private readonly store = inject(Store<{}>);
@@ -413,12 +415,19 @@ export class TraceViewer implements OnInit, AfterViewInit, OnDestroy {
       });
   }
 
-  ngOnInit() {}
+  ngOnInit(): void {}
 
-  ngAfterViewInit() {}
+  ngAfterViewInit(): void {}
 
-  async initializeWasmApp() {
+  async initializeWasmApp(): Promise<void> {
     this.traceViewerModule = await traceViewerV2Main();
+    if (this.isDestroyed) {
+      if (this.traceViewerModule !== null) {
+        shutdownTraceViewerV2();
+        this.traceViewerModule = null;
+      }
+      return;
+    }
 
     let savedPalette: string | null = null;
     try {
@@ -433,12 +442,11 @@ export class TraceViewer implements OnInit, AfterViewInit, OnDestroy {
       this.allFlowCategories = this.traceViewerModule.getAllFlowCategories();
       this.selectAllFlowCategories();
     }
-
     this.update(this.navigationEvent);
     this.setupColorOnboarding();
   }
 
-  update(event: NavigationEvent) {
+  update(event: NavigationEvent): void {
     const isStreaming = event.tag === 'trace_viewer@';
     const run = event.run || '';
     const tag = event.tag || '';
@@ -518,14 +526,22 @@ export class TraceViewer implements OnInit, AfterViewInit, OnDestroy {
     }
   }
 
-  ngOnDestroy() {
-    // Unsubscribes all pending subscriptions.
-    this.destroyed.next();
-    this.destroyed.complete();
-    window.removeEventListener(
-      DETAILS_RECEIVED_EVENT_NAME,
-      this.detailsReceivedEventListener,
-    );
+  ngOnDestroy(): void {
+    this.isDestroyed = true;
+    try {
+      if (this.useTraceViewerV2 || this.traceViewerModule !== null) {
+        shutdownTraceViewerV2();
+        this.traceViewerModule = null;
+      }
+    } finally {
+      // Unsubscribes all pending subscriptions.
+      this.destroyed.next();
+      this.destroyed.complete();
+      window.removeEventListener(
+        DETAILS_RECEIVED_EVENT_NAME,
+        this.detailsReceivedEventListener,
+      );
+    }
   }
 
   private readonly detailsReceivedEventListener = (event: Event) => {
@@ -710,9 +726,10 @@ export class TraceViewer implements OnInit, AfterViewInit, OnDestroy {
     pid?: number,
   ) {
     const key = `${name}-${startUs}-${durationUs}`;
-    if (this.eventArgsCache.has(key)) {
+    const cachedArgs = this.eventArgsCache.get(key);
+    if (cachedArgs !== undefined) {
       if (this.selectedEvent) {
-        this.addArgsToSelectedEvent(this.eventArgsCache.get(key)!);
+        this.addArgsToSelectedEvent(cachedArgs);
       }
       return;
     }
@@ -728,8 +745,11 @@ export class TraceViewer implements OnInit, AfterViewInit, OnDestroy {
 
     let host = '';
     // Use precise host from pidToHostMap if available
-    if (pid !== undefined && this.pidToHostMap.has(pid)) {
-      host = this.pidToHostMap.get(pid)!;
+    if (pid !== undefined) {
+      const pidHost = this.pidToHostMap.get(pid);
+      if (pidHost !== undefined) {
+        host = pidHost;
+      }
     }
     if (!host) {
       host = this.getCurrentHost();
@@ -775,8 +795,14 @@ export class TraceViewer implements OnInit, AfterViewInit, OnDestroy {
     this.selectedEventProperties = properties;
   }
 
-  switchToOldFrontend(showSurvey = true) {
+  // END Trace Viewer V2 WASM App Methods
+
+  switchToOldFrontend(showSurvey = true): void {
     this.useTraceViewerV2 = false;
+    if (this.traceViewerModule !== null) {
+      shutdownTraceViewerV2();
+      this.traceViewerModule = null;
+    }
     window.gtag &&
       window.gtag('event', 'switch-frontend', {
         'event_category': 'user_interaction',
@@ -787,7 +813,11 @@ export class TraceViewer implements OnInit, AfterViewInit, OnDestroy {
     const queryParams = this.dataService.getSearchParams();
     queryParams.set('use_trace_viewer_v2', 'false');
     // Store preference to stay on v1
-    window.localStorage.removeItem('use_trace_viewer_v2');
+    try {
+      window.localStorage.removeItem('use_trace_viewer_v2');
+    } catch {
+      // Local storage access is restricted or full
+    }
 
     // Add a flag to tell the Angular to show the HaTS survey.
     // Set to true when user switches from v2 to v1 by clicking the "Switch to
@@ -810,7 +840,7 @@ export class TraceViewer implements OnInit, AfterViewInit, OnDestroy {
     });
   }
 
-  switchToV2Frontend() {
+  switchToV2Frontend(): void {
     this.useTraceViewerV2 = true;
     window.gtag &&
       window.gtag('event', 'switch-frontend', {
@@ -821,7 +851,11 @@ export class TraceViewer implements OnInit, AfterViewInit, OnDestroy {
       });
     const queryParams = this.dataService.getSearchParams();
     queryParams.set('use_trace_viewer_v2', 'true');
-    window.localStorage.setItem('use_trace_viewer_v2', 'true');
+    try {
+      window.localStorage.setItem('use_trace_viewer_v2', 'true');
+    } catch {
+      // Local storage access is restricted or full
+    }
 
     // Delete the survey flag in v2 to keep the url clean.
     queryParams.delete('show_hats_survey');

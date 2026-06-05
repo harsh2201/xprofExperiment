@@ -54,9 +54,36 @@ constexpr char kFullTimespan[] = "fullTimespan";
 //       [1000000.0, 1.0],
 //       [1000001.0, 2.0]
 //     ]
+class JsonStringInterner {
+ public:
+  JsonStringInterner() {
+    pool_.push_back("");
+    map_[""] = 0;
+  }
+
+  uint32_t Intern(absl::string_view str) {
+    if (str.empty()) return 0;
+    auto it = map_.find(str);
+    if (it != map_.end()) {
+      return it->second;
+    }
+    uint32_t index = pool_.size();
+    pool_.push_back(std::string(str));
+    map_[pool_.back()] = index;
+    return index;
+  }
+
+  std::vector<std::string> TakePool() { return std::move(pool_); }
+
+ private:
+  absl::flat_hash_map<std::string, uint32_t> map_;
+  std::vector<std::string> pool_;
+};
+
 void ParseAndAppend(const emscripten::val& event, ParsedTraceEvents& result,
-                    absl::flat_hash_map<std::pair<ProcessId, std::string>,
-                                        TraceEvent>& open_async_events) {
+                    absl::flat_hash_map<std::pair<ProcessId, uint64_t>,
+                                        TraceEvent>& open_async_events,
+                    JsonStringInterner& interner) {
   if (!event.hasOwnProperty("ph")) {
     return;
   }
@@ -106,7 +133,10 @@ void ParseAndAppend(const emscripten::val& event, ParsedTraceEvents& result,
       ev.pid = static_cast<ProcessId>(event["pid"].as<double>());
     if (event.hasOwnProperty("tid"))
       ev.tid = static_cast<ThreadId>(event["tid"].as<double>());
-    if (event.hasOwnProperty("name")) ev.name = event["name"].as<std::string>();
+    if (event.hasOwnProperty("name")) {
+      ev.name = event["name"].as<std::string>();
+      ev.name_index = interner.Intern(ev.name);
+    }
     if (event.hasOwnProperty("ts")) ev.ts = event["ts"].as<Microseconds>();
     if (event.hasOwnProperty("dur")) ev.dur = event["dur"].as<Microseconds>();
     if (event.hasOwnProperty("cat")) {
@@ -119,15 +149,21 @@ void ParseAndAppend(const emscripten::val& event, ParsedTraceEvents& result,
     }
     if (event.hasOwnProperty("id")) {
       if (event["id"].isString()) {
-        ev.id = event["id"].as<std::string>();
+        uint64_t flow_id = 0;
+        if (absl::SimpleAtoi(event["id"].as<std::string>(), &flow_id)) {
+          ev.flow_id = flow_id;
+        }
       } else {
-        ev.id = std::to_string((int64_t)event["id"].as<double>());
+        ev.flow_id = static_cast<uint64_t>(event["id"].as<double>());
       }
     } else if (event.hasOwnProperty("bind_id")) {
       if (event["bind_id"].isString()) {
-        ev.id = event["bind_id"].as<std::string>();
+        uint64_t flow_id = 0;
+        if (absl::SimpleAtoi(event["bind_id"].as<std::string>(), &flow_id)) {
+          ev.flow_id = flow_id;
+        }
       } else {
-        ev.id = std::to_string((int64_t)event["bind_id"].as<double>());
+        ev.flow_id = static_cast<uint64_t>(event["bind_id"].as<double>());
       }
     }
     if (event.hasOwnProperty("args")) {
@@ -156,20 +192,15 @@ void ParseAndAppend(const emscripten::val& event, ParsedTraceEvents& result,
         // issues from stringifying potentially large structures.
       }
     }
-    // We use Fingerprint64 for a stable event ID because absl::HashOf
-    // does not guarantee stability across different executions or binaries,
-    // and we need consistency for event associations.
-    ev.event_id =
-        tsl::Fingerprint64(absl::StrCat(ev.name, ":", ev.ts, ":", ev.dur));
     switch (ev.ph) {
       case Phase::kAsyncBegin:
-        if (!ev.id.empty()) {
-          open_async_events[{ev.pid, ev.id}] = std::move(ev);
+        if (ev.flow_id != 0) {
+          open_async_events[{ev.pid, ev.flow_id}] = std::move(ev);
         }
         break;
       case Phase::kAsyncEnd:
-        if (!ev.id.empty()) {
-          auto it = open_async_events.find({ev.pid, ev.id});
+        if (ev.flow_id != 0) {
+          auto it = open_async_events.find({ev.pid, ev.flow_id});
           if (it != open_async_events.end()) {
             TraceEvent& begin_ev = it->second;
             begin_ev.ph = Phase::kComplete;
@@ -188,15 +219,12 @@ void ParseAndAppend(const emscripten::val& event, ParsedTraceEvents& result,
         break;
       case Phase::kFlowStart:
       case Phase::kFlowEnd:
-        if (!ev.id.empty()) {
-          result.flow_events.push_back(std::move(ev));
+        if (ev.flow_id != 0) {
+          result.flame_events.push_back(std::move(ev));
         }
         break;
       case Phase::kComplete:
       case Phase::kInstant:
-        if (!ev.id.empty()) {
-          result.flow_events.push_back(ev);
-        }
         result.flame_events.push_back(std::move(ev));
         break;
       case Phase::kMetadata:
@@ -230,18 +258,19 @@ ParsedTraceEvents ParseTraceEvents(
   // in number.
   result.flame_events.reserve(js_events.size());
 
-  absl::flat_hash_map<std::pair<ProcessId, std::string>, TraceEvent>
+  absl::flat_hash_map<std::pair<ProcessId, uint64_t>, TraceEvent>
       open_async_events;
+  JsonStringInterner interner;
   for (const auto& js_event : js_events) {
-    ParseAndAppend(js_event, result, open_async_events);
+    ParseAndAppend(js_event, result, open_async_events, interner);
   }
+  result.interned_string_pool = interner.TakePool();
   // Reclaim unused memory.
   result.flame_events.shrink_to_fit();
   // Shrink vectors for counter events to release unused memory.
   // Vectors typically double in capacity upon reallocation; shrinking ensures
   // memory usage matches the actual data size.
   result.counter_events.shrink_to_fit();
-  result.flow_events.shrink_to_fit();
 
   if (trace_data.hasOwnProperty(kFullTimespan)) {
     emscripten::val span = trace_data[kFullTimespan];
