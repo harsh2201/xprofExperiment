@@ -277,6 +277,59 @@ void Timeline::SetTimelineData(FlameChartTimelineData data) {
   UpdateLevelPositions(data);
   timeline_data_ = std::move(data);
 
+  // Reconcile loaded_index for all search results against the new
+  // timeline_data_.
+  const int num_loaded = timeline_data_.entry_event_ids.size();
+  absl::flat_hash_map<EventId, int> event_id_to_loaded_index;
+  for (int i = 0; i < num_loaded; ++i) {
+    event_id_to_loaded_index.try_emplace(timeline_data_.entry_event_ids[i], i);
+  }
+
+  for (SearchResult& result : search_results_) {
+    if (absl::flat_hash_map<EventId, int>::const_iterator it =
+            event_id_to_loaded_index.find(result.event_id);
+        it != event_id_to_loaded_index.end()) {
+      result.loaded_index = it->second;
+    } else {
+      // Fallback fingerprint check by matching PID and near-exact start_time
+      result.loaded_index = -1;
+      for (int i = 0; i < num_loaded; ++i) {
+        if (timeline_data_.entry_pids[i] == result.pid &&
+            std::abs(timeline_data_.entry_start_times[i] - result.start_time) <
+                1.0) {
+          result.loaded_index = i;
+          result.event_id = timeline_data_.entry_event_ids[i];
+          break;
+        }
+      }
+    }
+  }
+
+  if (pending_navigation_event_id_.has_value()) {
+    const EventId pending_id = pending_navigation_event_id_.value();
+    std::vector<EventId>::iterator it =
+        absl::c_find(timeline_data_.entry_event_ids, pending_id);
+    int matched_index = -1;
+    if (it != timeline_data_.entry_event_ids.end()) {
+      matched_index = std::distance(timeline_data_.entry_event_ids.begin(), it);
+    } else if (current_search_result_index_ >= 0 &&
+               current_search_result_index_ < search_results_.size()) {
+      matched_index =
+          search_results_[current_search_result_index_].loaded_index;
+    }
+
+    if (matched_index != -1) {
+      ZoomEvent(matched_index);
+      pending_navigation_event_id_.reset();
+    }
+  } else if (current_search_result_index_ >= 0 &&
+             current_search_result_index_ < search_results_.size()) {
+    const SearchResult& active = search_results_[current_search_result_index_];
+    if (active.loaded_index != -1) {
+      selected_event_index_ = active.loaded_index;
+    }
+  }
+
   if (is_incremental_loading_) {
     should_restore_scroll_ = true;
   }
@@ -914,6 +967,7 @@ void Timeline::ZoomEvent(int event_index) {
 
   selected_event_index_ = event_index;
   event_index_to_scroll_to_ = event_index;
+  ExpandRelatedTracks(event_index);
 
   const Microseconds start = timeline_data_.entry_start_times[event_index];
   const Microseconds event_duration =
@@ -1256,8 +1310,21 @@ void Timeline::DrawEvent(int group_index, int event_index,
     const Pixel corner_rounding =
         is_hovered ? kHoverCornerRounding : kCornerRounding;
 
-    const ImU32 event_color =
-        GetColorForId(event_name, palette_.GetTraceColors());
+    ImU32 event_color = GetColorForId(event_name, palette_.GetTraceColors());
+
+    bool matches_search = false;
+    if (!search_query_lower_.empty()) {
+      matches_search =
+          absl::StartsWithIgnoreCase(event_name, search_query_lower_);
+      if (!matches_search) {
+        // Gray out non-matching events with muted grayscale and lower opacity
+        const uint32_t r = (event_color >> IM_COL32_R_SHIFT) & 0xFF;
+        const uint32_t g = (event_color >> IM_COL32_G_SHIFT) & 0xFF;
+        const uint32_t b = (event_color >> IM_COL32_B_SHIFT) & 0xFF;
+        const uint32_t luminance = (r * 299 + g * 587 + b * 114) / 1000;
+        event_color = IM_COL32(luminance, luminance, luminance, 102);
+      }
+    }
 
     const bool is_instant = timeline_data_.entry_total_times[event_index] == 0;
     if (is_instant) {
@@ -1274,8 +1341,10 @@ void Timeline::DrawEvent(int group_index, int event_index,
       // Add transparency (0.6 opacity) to the event color of instant events
       // to help distinguish overlapping ones.
       const ImU32 transparent_color =
-          (event_color & ~IM_COL32_A_MASK) |
-          (static_cast<ImU32>(0.6f * 255.0f) << IM_COL32_A_SHIFT);
+          matches_search
+              ? event_color
+              : ((event_color & ~IM_COL32_A_MASK) |
+                 (static_cast<ImU32>(0.6f * 255.0f) << IM_COL32_A_SHIFT));
 
       draw_list->AddTriangleFilled(top, left_bottom, right_bottom,
                                    transparent_color);
@@ -2615,6 +2684,7 @@ void Timeline::MaybeRequestData() {
 
 void Timeline::SetSearchQuery(const std::string& query) {
   search_query_lower_ = absl::AsciiStrToLower(query);
+  pending_navigation_event_id_.reset();
   search_results_.clear();
   current_search_result_index_ = -1;
 
@@ -2623,22 +2693,135 @@ void Timeline::SetSearchQuery(const std::string& query) {
     return;
   }
 
-  for (int i = 0; i < timeline_data_.entry_names.size(); ++i) {
-    const auto& name = timeline_data_.entry_names[i];
-    if (absl::StartsWithIgnoreCase(name, query)) {
-      search_results_.push_back(i);
+  RecomputeSearchResults();
+}
+
+void Timeline::RecomputeSearchResults() {
+  search_results_.clear();
+  current_search_result_index_ = -1;
+  if (search_query_lower_.empty()) {
+    if (redraw_callback_) redraw_callback_();
+    return;
+  }
+
+  const int num_entries = timeline_data_.entry_names.size();
+  for (int i = 0; i < num_entries; ++i) {
+    const std::string& name = timeline_data_.entry_names[i];
+    if (absl::StartsWithIgnoreCase(name, search_query_lower_)) {
+      const EventId event_id = (i < timeline_data_.entry_event_ids.size())
+                                   ? timeline_data_.entry_event_ids[i]
+                                   : 0;
+      const int level = (i < timeline_data_.entry_levels.size())
+                            ? timeline_data_.entry_levels[i]
+                            : -1;
+      const Microseconds start_time =
+          (i < timeline_data_.entry_start_times.size())
+              ? timeline_data_.entry_start_times[i]
+              : 0.0;
+      const Microseconds total_time =
+          (i < timeline_data_.entry_total_times.size())
+              ? timeline_data_.entry_total_times[i]
+              : 0.0;
+      const ProcessId pid = (i < timeline_data_.entry_pids.size())
+                                ? timeline_data_.entry_pids[i]
+                                : 0;
+      const ThreadId tid = (i < timeline_data_.entry_tids.size())
+                               ? timeline_data_.entry_tids[i]
+                               : 0;
+      search_results_.push_back(SearchResult{.event_id = event_id,
+                                             .level = level,
+                                             .start_time = start_time,
+                                             .duration = total_time,
+                                             .pid = pid,
+                                             .tid = tid,
+                                             .loaded_index = i});
     }
   }
 
   // Sort results by start time to make navigation natural.
-  absl::c_sort(search_results_, [&](int a, int b) {
-    return timeline_data_.entry_start_times[a] <
-           timeline_data_.entry_start_times[b];
-  });
+  absl::c_sort(search_results_,
+               [](const SearchResult& a, const SearchResult& b) {
+                 return a.start_time < b.start_time;
+               });
 
-  if (!search_results_.empty()) {
-    current_search_result_index_ = 0;
-    RevealEvent(search_results_[0]);
+  if (redraw_callback_) redraw_callback_();
+}
+
+void Timeline::SetSearchResults(const ParsedTraceEvents& search_results) {
+  EventId selected_event_id = -1;
+  if (current_search_result_index_ >= 0 &&
+      current_search_result_index_ < search_results_.size()) {
+    selected_event_id = search_results_[current_search_result_index_].event_id;
+  }
+
+  search_results_.clear();
+  current_search_result_index_ = -1;
+
+  if (search_query_lower_.empty()) {
+    if (redraw_callback_) redraw_callback_();
+    return;
+  }
+
+  absl::flat_hash_map<EventId, int> event_id_to_loaded_index;
+  absl::flat_hash_map<EventId, int> event_id_to_level;
+  const int num_loaded = timeline_data_.entry_event_ids.size();
+  for (int i = 0; i < num_loaded; ++i) {
+    const EventId ev_id = timeline_data_.entry_event_ids[i];
+    event_id_to_loaded_index.try_emplace(ev_id, i);
+    event_id_to_level.try_emplace(ev_id, timeline_data_.entry_levels[i]);
+  }
+
+  for (const TraceEvent& event : search_results.flame_events) {
+    if (event.ph != Phase::kComplete) continue;
+    int level = -1;
+    if (absl::flat_hash_map<EventId, int>::const_iterator it =
+            event_id_to_level.find(event.event_id);
+        it != event_id_to_level.end()) {
+      level = it->second;
+    }
+    int loaded_index = -1;
+    if (absl::flat_hash_map<EventId, int>::const_iterator it =
+            event_id_to_loaded_index.find(event.event_id);
+        it != event_id_to_loaded_index.end()) {
+      loaded_index = it->second;
+    } else {
+      // Fallback fingerprint check by matching PID and near-exact start_time
+      for (int i = 0; i < num_loaded; ++i) {
+        if (timeline_data_.entry_pids[i] == event.pid &&
+            std::abs(timeline_data_.entry_start_times[i] - event.ts) < 1.0) {
+          loaded_index = i;
+          break;
+        }
+      }
+    }
+
+    search_results_.push_back(SearchResult{.event_id = event.event_id,
+                                           .level = level,
+                                           .start_time = event.ts,
+                                           .duration = event.dur,
+                                           .pid = event.pid,
+                                           .tid = event.tid,
+                                           .loaded_index = loaded_index});
+  }
+
+  if (search_results_.empty()) {
+    if (redraw_callback_) redraw_callback_();
+    return;
+  }
+
+  absl::c_sort(search_results_,
+               [](const SearchResult& a, const SearchResult& b) {
+                 return a.start_time < b.start_time;
+               });
+
+  if (selected_event_id != -1) {
+    std::vector<SearchResult>::iterator it =
+        absl::c_find_if(search_results_, [&](const SearchResult& result) {
+          return result.event_id == selected_event_id;
+        });
+    if (it != search_results_.end()) {
+      current_search_result_index_ = std::distance(search_results_.begin(), it);
+    }
   }
 
   if (redraw_callback_) redraw_callback_();
@@ -2650,7 +2833,31 @@ void Timeline::NavigateToNextSearchResult() {
   if (current_search_result_index_ >= search_results_.size()) {
     current_search_result_index_ = 0;
   }
-  RevealEvent(search_results_[current_search_result_index_]);
+  SearchResult& result = search_results_[current_search_result_index_];
+  if (result.loaded_index != -1) {
+    ZoomEvent(result.loaded_index);
+  } else {
+    const EventId event_id = result.event_id;
+    std::vector<EventId>::iterator it =
+        absl::c_find(timeline_data_.entry_event_ids, event_id);
+    if (it != timeline_data_.entry_event_ids.end()) {
+      const int idx = std::distance(timeline_data_.entry_event_ids.begin(), it);
+      result.loaded_index = idx;
+      ZoomEvent(idx);
+    } else {
+      pending_navigation_event_id_ = event_id;
+      const Microseconds start = result.start_time;
+      const Microseconds event_duration = result.duration;
+      const Microseconds duration =
+          std::max(kEventNavigationMinDurationMicros,
+                   std::min(event_duration * kEventNavigationZoomFactor,
+                            kEventNavigationMaxDurationMicros));
+      const Microseconds center = start + event_duration / 2.0;
+      TimeRange new_range = {center - duration / 2.0, center + duration / 2.0};
+      ConstrainTimeRange(new_range);
+      SetVisibleRange(new_range, /*animate=*/true);
+    }
+  }
   if (redraw_callback_) redraw_callback_();
 }
 
@@ -2660,7 +2867,31 @@ void Timeline::NavigateToPrevSearchResult() {
   if (current_search_result_index_ < 0) {
     current_search_result_index_ = search_results_.size() - 1;
   }
-  RevealEvent(search_results_[current_search_result_index_]);
+  SearchResult& result = search_results_[current_search_result_index_];
+  if (result.loaded_index != -1) {
+    ZoomEvent(result.loaded_index);
+  } else {
+    const EventId event_id = result.event_id;
+    std::vector<EventId>::iterator it =
+        absl::c_find(timeline_data_.entry_event_ids, event_id);
+    if (it != timeline_data_.entry_event_ids.end()) {
+      const int idx = std::distance(timeline_data_.entry_event_ids.begin(), it);
+      result.loaded_index = idx;
+      ZoomEvent(idx);
+    } else {
+      pending_navigation_event_id_ = event_id;
+      const Microseconds start = result.start_time;
+      const Microseconds event_duration = result.duration;
+      const Microseconds duration =
+          std::max(kEventNavigationMinDurationMicros,
+                   std::min(event_duration * kEventNavigationZoomFactor,
+                            kEventNavigationMaxDurationMicros));
+      const Microseconds center = start + event_duration / 2.0;
+      TimeRange new_range = {center - duration / 2.0, center + duration / 2.0};
+      ConstrainTimeRange(new_range);
+      SetVisibleRange(new_range, /*animate=*/true);
+    }
+  }
   if (redraw_callback_) redraw_callback_();
 }
 
