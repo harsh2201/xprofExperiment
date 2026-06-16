@@ -31,6 +31,7 @@ import {
 import {
   DETAILS_RECEIVED_EVENT_NAME,
   isDetailsReceivedEvent,
+  TraceData as MainTraceData,
   SearchEventsEventDetail,
   TraceDetailKey,
   TraceDetails,
@@ -40,8 +41,15 @@ import {
 import {DataServiceV2} from 'org_xprof/frontend/app/services/data_service_v2/data_service_v2';
 import {SOURCE_CODE_SERVICE_INTERFACE_TOKEN} from 'org_xprof/frontend/app/services/source_code_service/source_code_service_interface';
 import {getHostsState} from 'org_xprof/frontend/app/store/selectors';
-import {combineLatest, ReplaySubject} from 'rxjs';
-import {takeUntil} from 'rxjs/operators';
+import {combineLatest, of, ReplaySubject, Subject} from 'rxjs';
+import {
+  catchError,
+  debounceTime,
+  distinctUntilChanged,
+  finalize,
+  switchMap,
+  takeUntil,
+} from 'rxjs/operators';
 import {
   COLOR_PALETTE_STORAGE_KEY,
   COLOR_PALETTES,
@@ -71,6 +79,23 @@ import {
 interface TraceData {
   traceEvents?: Array<{[key: string]: unknown}>;
   [key: string]: unknown;
+}
+
+interface AdjNodesResponse {
+  operand_names: string[];
+  consumer_names: string[];
+  [key: string]: unknown;
+}
+
+function isAdjNodesResponse(data: unknown): data is AdjNodesResponse {
+  if (typeof data !== 'object' || data === null) {
+    return false;
+  }
+  const dict = data as Record<string, unknown>;
+  return (
+    Array.isArray(dict['operand_names']) &&
+    Array.isArray(dict['consumer_names'])
+  );
 }
 
 /** The name of the event triggered when a trace event is selected. */
@@ -131,8 +156,11 @@ export class TraceViewer implements OnInit, AfterViewInit, OnDestroy {
   selectionStartFormat?: string;
   selectionExtentFormat?: string;
   private readonly eventArgsCache = new Map<string, {[key: string]: string}>();
+  private readonly hloAdjNodesCache = new Map<string, AdjNodesResponse>();
+  private readonly pendingAdjNodesFetches = new Set<string>();
   private queryString = '';
   searching = false;
+  private readonly searchQuerySubject = new Subject<string>();
   readonly availableDetails: Array<{key: TraceDetailKey; label: string}> = [
     {key: 'full_dma', label: 'Full DMA'},
   ];
@@ -304,7 +332,43 @@ export class TraceViewer implements OnInit, AfterViewInit, OnDestroy {
       });
   }
 
-  ngOnInit() {}
+  ngOnInit() {
+    this.searchQuerySubject
+      .pipe(
+        takeUntil(this.destroyed),
+        debounceTime(300),
+        distinctUntilChanged(),
+        switchMap((query) => {
+          if (!query) {
+            return of(null);
+          }
+          this.searching = true;
+          return this.dataService
+            .getData(
+              this.navigationEvent.run || '',
+              this.navigationEvent.tag || '',
+              this.getCurrentHost(),
+              new Map([['search_prefix', query]]),
+            )
+            .pipe(
+              catchError(() => of(null)),
+              finalize(() => {
+                this.searching = false;
+              }),
+            );
+        }),
+      )
+      .subscribe((data) => {
+        if (this.traceViewerModule && data) {
+          const traceData = data as TraceData;
+          this.traceViewerModule.setSearchResultsInWasm({
+            ...traceData,
+            traceEvents: traceData.traceEvents || [],
+          } as MainTraceData);
+          this.container?.updateSearchResultCountText();
+        }
+      });
+  }
 
   ngAfterViewInit() {}
 
@@ -464,6 +528,7 @@ export class TraceViewer implements OnInit, AfterViewInit, OnDestroy {
       this.selectionExtentFormat = undefined;
       return;
     }
+    this.updateWasmProcessMappings();
     this.selectionStartFormat = undefined;
     this.selectionExtentFormat = undefined;
     this.eventDetailColumns = [...DEFAULT_EVENT_DETAIL_COLUMNS];
@@ -501,6 +566,7 @@ export class TraceViewer implements OnInit, AfterViewInit, OnDestroy {
     if (uid) {
       this.maybeFetchEventArgs(name, startUs, durationUs, uid, pid);
     }
+    this.maybeFetchAdjacentNodes();
   }
 
   updateWasmProcessMappings() {
@@ -579,6 +645,7 @@ export class TraceViewer implements OnInit, AfterViewInit, OnDestroy {
     const app = this.traceViewerModule.application.instance();
     app.setSearchQuery(query || '');
     this.container?.updateSearchResultCountText();
+    this.searchQuerySubject.next(query || '');
   }
 
   onInitializeWasm() {
@@ -596,13 +663,26 @@ export class TraceViewer implements OnInit, AfterViewInit, OnDestroy {
     uid: string,
     pid?: number,
   ) {
-    const key = `${name}-${startUs}-${durationUs}`;
-    if (this.eventArgsCache.has(key)) {
+    let cachedArgs: {[key: string]: string} | undefined;
+    for (const [k, args] of this.eventArgsCache.entries()) {
+      const lastColon = k.lastIndexOf(':');
+      if (lastColon !== -1 && k.substring(0, lastColon) === name) {
+        const cachedStartUs = Number(k.substring(lastColon + 1));
+        if (Math.abs(cachedStartUs - startUs) < 50000) {
+          cachedArgs = args;
+          break;
+        }
+      }
+    }
+
+    if (cachedArgs) {
       if (this.selectedEvent) {
-        this.addArgsToSelectedEvent(this.eventArgsCache.get(key)!);
+        this.addArgsToSelectedEvent(cachedArgs);
       }
       return;
     }
+
+    const cacheKey = `${name}:${startUs}`;
 
     const params = new Map<string, string>();
     params.set('event_name', name);
@@ -647,7 +727,7 @@ export class TraceViewer implements OnInit, AfterViewInit, OnDestroy {
           lastEvent['args']
         ) {
           const args = lastEvent['args'] as {[key: string]: string};
-          this.eventArgsCache.set(key, args);
+          this.eventArgsCache.set(cacheKey, args);
           this.addArgsToSelectedEvent(args);
         }
       });
@@ -659,6 +739,103 @@ export class TraceViewer implements OnInit, AfterViewInit, OnDestroy {
     for (const key of Object.keys(args)) {
       properties.push({property: key, value: args[key]});
     }
+    this.selectedEventProperties = properties;
+    this.maybeFetchAdjacentNodes();
+  }
+
+  private maybeFetchAdjacentNodes() {
+    if (!this.selectedEvent) return;
+    let name = '';
+    let module = '';
+    for (const prop of this.selectedEventProperties) {
+      if (prop.property === 'Operands' || prop.property === 'Consumers') {
+        return;
+      }
+      if (prop.property === 'HLO Op' && prop.value) {
+        name = prop.value.toString();
+      } else if (!name && prop.property === 'Name' && prop.value) {
+        name = prop.value.toString();
+      }
+      if (prop.property === 'HLO Module' && prop.value) {
+        module = prop.value.toString();
+      } else if (!module && prop.property === 'hlo_module' && prop.value) {
+        module = prop.value.toString();
+      }
+    }
+    if (!name || !module) return;
+
+    const key = `${name}-${module}`;
+    if (this.hloAdjNodesCache.has(key)) {
+      this.injectAdjacentNodes(this.hloAdjNodesCache.get(key)!, name, module);
+      return;
+    }
+    if (this.pendingAdjNodesFetches.has(key)) return;
+
+    this.pendingAdjNodesFetches.add(key);
+
+    const params = new Map<string, string | boolean>();
+    params.set('type', 'adj_nodes');
+    params.set('node_name', name);
+    params.set('module_name', module);
+
+    this.dataService
+      .getData(
+        this.navigationEvent.run || '',
+        'graph_viewer',
+        this.getCurrentHost(),
+        params,
+      )
+      .pipe(
+        takeUntil(this.destroyed),
+        finalize(() => {
+          this.pendingAdjNodesFetches.delete(key);
+        }),
+      )
+      .subscribe((data) => {
+        if (isAdjNodesResponse(data)) {
+          this.hloAdjNodesCache.set(key, data);
+          this.injectAdjacentNodes(data, name, module);
+        }
+      });
+  }
+
+  private injectAdjacentNodes(
+    adjNodes: AdjNodesResponse,
+    targetNodeName: string,
+    targetModuleName: string,
+  ) {
+    if (!this.selectedEvent) return;
+    let currentName = '';
+    let currentModule = '';
+    for (const prop of this.selectedEventProperties) {
+      if (prop.property === 'HLO Op' && prop.value) {
+        currentName = prop.value.toString();
+      } else if (!currentName && prop.property === 'Name' && prop.value) {
+        currentName = prop.value.toString();
+      }
+      if (prop.property === 'HLO Module' && prop.value) {
+        currentModule = prop.value.toString();
+      } else if (
+        !currentModule &&
+        prop.property === 'hlo_module' &&
+        prop.value
+      ) {
+        currentModule = prop.value.toString();
+      }
+    }
+    if (currentName !== targetNodeName || currentModule !== targetModuleName) {
+      return;
+    }
+
+    const properties = [...this.selectedEventProperties];
+    properties.push({
+      property: 'Operands',
+      value: adjNodes['operand_names'].join(', '),
+    });
+    properties.push({
+      property: 'Consumers',
+      value: adjNodes['consumer_names'].join(', '),
+    });
     this.selectedEventProperties = properties;
   }
 
