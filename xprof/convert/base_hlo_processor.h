@@ -13,8 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef THIRD_PARTY_XPROF_CONVERT_BASE_OP_STATS_PROCESSOR_H_
-#define THIRD_PARTY_XPROF_CONVERT_BASE_OP_STATS_PROCESSOR_H_
+#ifndef THIRD_PARTY_XPROF_CONVERT_BASE_HLO_PROCESSOR_H_
+#define THIRD_PARTY_XPROF_CONVERT_BASE_HLO_PROCESSOR_H_
 
 #include <string>
 #include <vector>
@@ -22,32 +22,26 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "xla/service/hlo.pb.h"
 #include "tsl/profiler/protobuf/xplane.pb.h"
 #include "xprof/convert/tool_options.h"
 #include "xprof/convert/unified_profile_processor.h"
 #include "xprof/convert/unified_session_snapshot.h"
-#include "plugin/xprof/protobuf/op_stats.pb.h"
 
 namespace xprof {
 
-// Unified base class for OpStats processors across 1P and 3P environments.
-// Inherits virtually from UnifiedProfileProcessor to support combination with
-// other intermediate structural classes.
-class BaseOpStatsProcessor : public virtual UnifiedProfileProcessor {
+// Unified base class for Hlo processors across 1P and 3P environments.
+class BaseHloProcessor : public virtual UnifiedProfileProcessor {
  public:
-  explicit BaseOpStatsProcessor(
-      const tensorflow::profiler::ToolOptions& options)
+  explicit BaseHloProcessor(const tensorflow::profiler::ToolOptions& options)
       : options_(options) {}
 
-  virtual ~BaseOpStatsProcessor() = default;
+  virtual ~BaseHloProcessor() = default;
 
-  // Converts XSpace to serialized OpStats.
   absl::StatusOr<std::string> Map(
-      const XprofSessionSnapshot& session_snapshot,
-      absl::string_view hostname,
+      const XprofSessionSnapshot& session_snapshot, absl::string_view hostname,
       const tensorflow::profiler::XSpace& xspace) override;
-  // Deserializes map_outputs, combines OpStats, and delegates to
-  // ProcessCombinedOpStats.
+
   absl::Status Reduce(
       const XprofSessionSnapshot& session_snapshot,
       const std::vector<std::string>& map_output_files) override;
@@ -56,16 +50,9 @@ class BaseOpStatsProcessor : public virtual UnifiedProfileProcessor {
       const XprofSessionSnapshot& session_snapshot,
       const tensorflow::profiler::ToolOptions& options) override;
 
-  bool ShouldUseWorkerService(
+  virtual absl::Status ProcessHlo(
       const XprofSessionSnapshot& session_snapshot,
-      const tensorflow::profiler::ToolOptions& options) const override;
-
-  // Extension point for subclasses to process the merged OpStats.
-  // TODO: b/514176124 - Migrate to XprofSessionSnapshot in the child CL
-  // (cl/907391150).
-  virtual absl::Status ProcessCombinedOpStats(
-      const XprofSessionSnapshot& session_snapshot,
-      const tensorflow::profiler::OpStats& combined_op_stats,
+      const xla::HloProto& hlo_proto,
       const tensorflow::profiler::ToolOptions& options) = 0;
 
  protected:
@@ -74,4 +61,4 @@ class BaseOpStatsProcessor : public virtual UnifiedProfileProcessor {
 
 }  // namespace xprof
 
-#endif  // THIRD_PARTY_XPROF_CONVERT_BASE_OP_STATS_PROCESSOR_H_
+#endif  // THIRD_PARTY_XPROF_CONVERT_BASE_HLO_PROCESSOR_H_
