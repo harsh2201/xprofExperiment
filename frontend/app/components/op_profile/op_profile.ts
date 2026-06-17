@@ -16,7 +16,7 @@ const GROUP_BY_RULES = ['program', 'category', 'provenance'];
   changeDetection: ChangeDetectionStrategy.Default,standalone: false,
   selector: 'op-profile',
   templateUrl: './op_profile.ng.html',
-  styleUrls: ['./op_profile_common.scss']
+  styleUrls: ['./op_profile.scss']
 })
 export class OpProfile implements OnDestroy {
   private tool = 'hlo_op_profile';
