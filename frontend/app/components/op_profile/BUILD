@@ -11,7 +11,7 @@ xprof_ng_module(
         "op_profile_module.ts",
     ],
     assets = [
-        ":op_profile_common_css",
+        ":op_profile_css",
         "op_profile.ng.html",
     ],
     # strict_templates = False,
@@ -45,7 +45,7 @@ xprof_ng_module(
     ],
     assets = [
         "op_profile_base.ng.html",
-        ":op_profile_common_css",
+        ":op_profile_base_css",
     ],
     deps = [
         ":op_profile_data",
@@ -112,6 +112,26 @@ xprof_ng_module(
         "@org_xprof//frontend/app/common/interfaces:op_profile_proto_defs",
         "@org_xprof//frontend/app/services/data_service_v2:data_service_v2_interface",
         "@org_xprof//frontend/app/store",
+    ],
+)
+
+sass_binary(
+    name = "op_profile_css",
+    src = "op_profile.scss",
+    # stack = False,
+    sourcemap = False,
+    deps = [
+        ":op_profile_common",
+    ],
+)
+
+sass_binary(
+    name = "op_profile_base_css",
+    src = "op_profile_base.scss",
+    # stack = False,
+    sourcemap = False,
+    deps = [
+        ":op_profile_common",
     ],
 )
 

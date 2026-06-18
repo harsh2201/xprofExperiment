@@ -38,7 +38,7 @@ const GROUP_BY_RULES = ['program', 'category', 'provenance'];
   standalone: false,
   selector: 'op-profile-base',
   templateUrl: './op_profile_base.ng.html',
-  styleUrls: ['./op_profile_common.scss'],
+  styleUrls: ['./op_profile_base.scss'],
 })
 export class OpProfileBase implements OnDestroy, OnInit, OnChanges {
   /** Handles on-destroy Subject, used to unsubscribe. */

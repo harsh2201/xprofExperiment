@@ -1,0 +1,13 @@
+// CSS for an op profile base component.
+
+@import 'frontend/app/components/op_profile/op_profile_common';
+
+:host {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+mat-sidenav-container {
+  flex: 1;
+}
