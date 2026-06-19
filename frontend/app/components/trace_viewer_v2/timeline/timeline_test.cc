@@ -2463,6 +2463,55 @@ TEST(TimelineTest, ZoomEventInvalidIndexOutOfBounds) {
   EXPECT_DOUBLE_EQ(timeline.visible_range().end(), 50.0);
 }
 
+TEST(TimelineTest, AddBookmark_AddsBookmark) {
+  ColorPalette palette = ColorPalette::Default();
+  Timeline timeline(palette);
+  timeline.set_bookmarks_enabled(true);
+  timeline.set_data_time_range({0.0, 1000.0});
+  timeline.SetVisibleRange({0.0, 1000.0});
+
+  timeline.AddBookmark(100.0);
+
+  EXPECT_THAT(timeline.bookmarks(), ElementsAre(100.0));
+}
+
+TEST(TimelineTest, RemoveBookmark_RemovesBookmark) {
+  ColorPalette palette = ColorPalette::Default();
+  Timeline timeline(palette);
+  timeline.set_bookmarks_enabled(true);
+  timeline.set_data_time_range({0.0, 1000.0});
+  timeline.SetVisibleRange({0.0, 1000.0});
+
+  timeline.AddBookmark(100.0);
+  timeline.RemoveBookmark(100.0);
+
+  EXPECT_TRUE(timeline.bookmarks().empty());
+}
+
+TEST(TimelineTest, AddBookmark_Disabled) {
+  ColorPalette palette = ColorPalette::Default();
+  Timeline timeline(palette);
+  timeline.set_bookmarks_enabled(false);
+  timeline.set_data_time_range({0.0, 1000.0});
+
+  timeline.AddBookmark(100.0);
+
+  EXPECT_TRUE(timeline.bookmarks().empty());
+}
+
+TEST(TimelineTest, AddBookmark_DoesNotAddDuplicates) {
+  ColorPalette palette = ColorPalette::Default();
+  Timeline timeline(palette);
+  timeline.set_bookmarks_enabled(true);
+  timeline.set_data_time_range({0.0, 1000.0});
+  timeline.SetVisibleRange({0.0, 1000.0});
+
+  timeline.AddBookmark(100.0);
+  timeline.AddBookmark(100.0);
+
+  EXPECT_THAT(timeline.bookmarks(), ElementsAre(100.0));
+}
+
 // =============================================================================
 // Fixture: MockTimelineImGuiFixture
 // =============================================================================
