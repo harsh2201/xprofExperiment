@@ -1,3 +1,4 @@
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@repository_configuration//:repository_config.bzl", "PROFILER_REQUIREMENTS_FILE")
 load("@rules_python//python:pip.bzl", "compile_pip_requirements")
 
@@ -14,6 +15,18 @@ exports_files([
     "tsconfig.json",
     "rollup.config.js",
 ])
+
+bool_flag(
+    name = "include_llo_analytics",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "llo_analytics_enabled",
+    flag_values = {":include_llo_analytics": "True"},
+    visibility = ["//visibility:public"],
+)
 
 py_library(
     name = "expect_tensorflow_installed",

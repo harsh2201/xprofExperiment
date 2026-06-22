@@ -59,6 +59,14 @@ class ProfilerSessionTest(parameterized.TestCase):
     with self.assertRaisesRegex(RuntimeError, r"^INVALID_ARGUMENT"):
       profiler_wrapper_plugin._check_error(err)
 
+  def test_analyze_llo(self):
+    try:
+      test_file = self.create_tempfile().full_path
+      result = profiler_wrapper_plugin.analyze_llo(test_file)
+      self.assertFalse(result["success"])
+    except NotImplementedError:
+      self.skipTest("analyze_llo is not supported in this build")
+
 
 if __name__ == "__main__":
   absltest.main()
