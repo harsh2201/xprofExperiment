@@ -140,6 +140,8 @@ declare global {
 
   export declare interface TraceViewerV2Module extends EmscriptenModule {
   HEAPU8: Uint8Array;
+  _malloc(size: number): number;
+  _free(ptr: number): void;
   getFeatureFlag?(name: string): boolean;
   SetPalette(paletteName: string): void;
   canvas: HTMLCanvasElement;
@@ -149,12 +151,21 @@ declare global {
     data: TraceData,
     timeRangeFromUrl?: [number, number],
   ): void;
+  /**
+   * Passes compressed protobuf trace events from a memory buffer in the WASM heap.
+   * @param dataPtr A pointer to the memory address in the WASM heap where
+   *     the compressed trace data is stored.
+   * @param dataSize The size of the compressed trace data in bytes.
+   * @param timeRangeFromUrl Optional initial visible time range [start, end]
+   *     in milliseconds.
+   */
   processCompressedTraceEvents(
-    data: Uint8Array,
+    dataPtr: number,
+    dataSize: number,
     timeRangeFromUrl?: [number, number],
   ): void;
   /**
-   * Pass Perfetto trace events from a memory buffer in the WASM heap.
+   * Passes Perfetto trace events from a memory buffer in the WASM heap.
    * @param dataPtr A pointer to the memory address in the WASM heap where
    *     the Perfetto trace data is stored.
    * @param dataSize The size of the Perfetto trace data in bytes.
@@ -457,8 +468,12 @@ function setupFileInputHandler(
 /**
  * Dispatches an ERROR loading status event to the window and logs the message.
  */
-function dispatchErrorStatus(msg: string) {
-  console.error(msg);
+function dispatchErrorStatus(msg: string, error?: unknown) {
+  if (error !== undefined) {
+    console.error(msg, error);
+  } else {
+    console.error(msg);
+  }
 
   window.dispatchEvent(
     new CustomEvent(LOADING_STATUS_UPDATE_EVENT_NAME, {
@@ -496,8 +511,7 @@ async function decompressGzip(data: Uint8Array): Promise<Uint8Array | null> {
     ).arrayBuffer();
     return new Uint8Array(decompressedArrayBuffer as ArrayBuffer);
   } catch (error) {
-    console.error('Frontend: failed to decompress file', error);
-    dispatchErrorStatus('Failed to decompress gzipped file.');
+    dispatchErrorStatus('Failed to decompress gzipped file.', error);
     return null;
   }
 }
@@ -517,6 +531,9 @@ function processPerfettoTrace(
   let dataPtr: number | undefined;
   try {
     dataPtr = traceviewerModule._malloc(data.length);
+    if (!dataPtr) {
+      throw new Error('Failed to allocate WASM memory buffer');
+    }
     traceviewerModule.HEAPU8.set(data, dataPtr);
 
     traceviewerModule.processPerfettoTraceEvents(
@@ -526,9 +543,12 @@ function processPerfettoTrace(
       true,
     );
   } catch (error) {
-    dispatchErrorStatus(error instanceof Error ? error.message : String(error));
+    dispatchErrorStatus(
+      error instanceof Error ? error.message : String(error),
+      error,
+    );
   } finally {
-    if (dataPtr !== undefined) {
+    if (dataPtr !== undefined && dataPtr !== 0) {
       traceviewerModule._free(dataPtr);
     }
   }
@@ -565,7 +585,10 @@ function processJsonTrace(
 
     traceviewerModule.processTraceEvents(jsonData, undefined);
   } catch (error) {
-    dispatchErrorStatus(error instanceof Error ? error.message : String(error));
+    dispatchErrorStatus(
+      error instanceof Error ? error.message : String(error),
+      error,
+    );
     throw error;
   }
 }
@@ -612,6 +635,7 @@ async function processUploadedFile(
       `Error processing file: ${
         error instanceof Error ? error.message : String(error)
       }`,
+      error,
     );
   }
 }
@@ -794,10 +818,23 @@ async function fetchAndProcessTraceData(
 
       performance.mark('traceProcessStart');
 
-      traceviewerModule.processCompressedTraceEvents(
-        new Uint8Array(buffer),
-        timeRange,
-      );
+      let dataPtr: number | undefined;
+      try {
+        dataPtr = traceviewerModule._malloc(buffer.byteLength);
+        if (!dataPtr) {
+          throw new Error('Failed to allocate WASM memory buffer');
+        }
+        traceviewerModule.HEAPU8.set(new Uint8Array(buffer), dataPtr);
+        traceviewerModule.processCompressedTraceEvents(
+          dataPtr,
+          buffer.byteLength,
+          timeRange,
+        );
+      } finally {
+        if (dataPtr !== undefined && dataPtr !== 0) {
+          traceviewerModule._free(dataPtr);
+        }
+      }
     } else {
       const jsonData = await loadJsonDataInternal(urlObj.toString());
       if (isAbortRequested()) return;
