@@ -24,6 +24,17 @@ wasm_cc_library(
 )
 
 wasm_cc_library(
+    name = "proto_event_ref",
+    hdrs = ["proto_event_ref.h"],
+    deps = [
+        ":trace_event",
+        "@com_google_absl//absl/strings:string_view",
+        "@org_xprof//plugin/xprof/protobuf:trace_data_response_proto_cc",
+        "@tsl//tsl/profiler/lib:context_types",
+    ],
+)
+
+wasm_cc_library(
     name = "trace_event_parser",
     srcs = ["trace_event_parser.cc"],
     hdrs = ["trace_event_parser.h"],
@@ -52,6 +63,7 @@ wasm_cc_library(
         ":trace_event",
         ":trace_event_parser_core",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_protobuf//:protobuf",
         "@org_xprof//frontend/app/components/trace_viewer_v2:application",
         "@org_xprof//frontend/app/components/trace_viewer_v2/helper:time_formatter",
         "@org_xprof//frontend/app/components/trace_viewer_v2/timeline:data_provider",
@@ -72,7 +84,6 @@ cc_library(
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/strings",
         "@org_xprof//plugin/xprof/protobuf:trace_data_response_proto_cc",
-        "@tsl//tsl/platform:fingerprint",
         "@tsl//tsl/profiler/lib:context_types",
     ],
 )
@@ -83,7 +94,7 @@ proto_library(
 )
 
 cc_proto_library(
-    name = "trace_lite_proto_cc",
+    name = "trace_lite_cc_proto",
     deps = [":trace_lite_proto"],
 )
 
@@ -100,7 +111,7 @@ wasm_cc_library(
         ":perfetto_constants",
         ":trace_event",
         ":trace_event_parser",
-        ":trace_lite_proto_cc",
+        ":trace_lite_cc_proto",
     ],
     alwayslink = True,
 )
@@ -111,7 +122,7 @@ wasm_cc_test(
     deps = [
         ":perfetto_proto_parser",
         ":trace_event",
-        ":trace_lite_proto_cc",
+        ":trace_lite_cc_proto",
         "@com_google_googletest//:gtest_main",
     ],
 )
@@ -121,9 +132,11 @@ wasm_cc_library(
     srcs = ["trace_event_tree.cc"],
     hdrs = ["trace_event_tree.h"],
     deps = [
+        ":proto_event_ref",
         ":trace_event",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/types:span",
+        "@org_xprof//plugin/xprof/protobuf:trace_data_response_proto_cc",
     ],
 )
 
@@ -135,6 +148,7 @@ cc_test(
         ":trace_event_tree",
         "@com_google_absl//absl/types:span",
         "@com_google_googletest//:gtest_main",
+        "@org_xprof//plugin/xprof/protobuf:trace_data_response_proto_cc",
     ],
 )
 

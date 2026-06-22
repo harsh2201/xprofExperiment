@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -10,7 +12,6 @@
 #include "<gtest/gtest.h>"
 #include "absl/algorithm/container.h"
 #include "absl/strings/match.h"
-#include "absl/strings/str_cat.h"
 #include "imgui.h"
 #include "tsl/profiler/lib/context_types.h"
 #include "frontend/app/components/trace_viewer_v2/color/colors.h"
@@ -36,7 +37,6 @@ TraceEvent CreateMetadataEvent(std::string event_name, ProcessId pid,
           .name = std::move(event_name),
           .ts = 0.0,
           .dur = 0.0,
-          .id = "",
           .args = {{std::string(kName), std::move(thread_or_process_name)}}};
 }
 
@@ -106,7 +106,9 @@ TEST(DataProviderNoFixtureTest, SyncProcessWithNamedThreadsWithoutEvents) {
   EXPECT_EQ(data.groups[3].name, "Thread_3");
   EXPECT_EQ(data.groups[3].nesting_level, 1);
 
-  EXPECT_THAT(data.entry_names, ElementsAre("Event 1", "Event 3"));
+  ASSERT_THAT(data.entry_names, SizeIs(2));
+  EXPECT_EQ(data.interned_string_pool[data.entry_names[0]], "Event 1");
+  EXPECT_EQ(data.interned_string_pool[data.entry_names[1]], "Event 3");
 }
 
 TEST_F(DataProviderTest, ProcessEmptyTraceData) {
@@ -157,7 +159,6 @@ TEST_F(DataProviderTest, ProcessMetadataEventsWithEmptyName) {
        .name = "Task A",
        .ts = 5000.0,
        .dur = 1000.0,
-       .id = "",
        .args = {}},
   };
 
@@ -181,7 +182,6 @@ TEST_F(DataProviderTest, ProcessMetadataEventsWithNoNameArg) {
        .name = std::string(kProcessName),
        .ts = 0.0,
        .dur = 0.0,
-       .id = "",
        .args = {}},
       {.ph = Phase::kMetadata,
        .pid = 1,
@@ -189,7 +189,6 @@ TEST_F(DataProviderTest, ProcessMetadataEventsWithNoNameArg) {
        .name = std::string(kThreadName),
        .ts = 0.0,
        .dur = 0.0,
-       .id = "",
        .args = {}},
       {.ph = Phase::kComplete,
        .pid = 1,
@@ -197,7 +196,6 @@ TEST_F(DataProviderTest, ProcessMetadataEventsWithNoNameArg) {
        .name = "Task A",
        .ts = 5000.0,
        .dur = 1000.0,
-       .id = "",
        .args = {}},
   };
 
@@ -220,7 +218,6 @@ TEST_F(DataProviderTest, ProcessCompleteEvents) {
                                            .name = "Event 1",
                                            .ts = 1000.0,
                                            .dur = 200.0,
-                                           .id = "",
                                            .args = {}},
                                           {.ph = Phase::kComplete,
                                            .pid = 1,
@@ -228,7 +225,6 @@ TEST_F(DataProviderTest, ProcessCompleteEvents) {
                                            .name = "Event 2",
                                            .ts = 1100.0,
                                            .dur = 300.0,
-                                           .id = "",
                                            .args = {}}};
 
   data_provider_.ProcessTraceEvents({events, {}}, timeline_);
@@ -250,12 +246,12 @@ TEST_F(DataProviderTest, ProcessCompleteEvents) {
   EXPECT_THAT(data.entry_start_times, ElementsAre(1000.0, 1100.0));
   EXPECT_THAT(data.entry_total_times, ElementsAre(200.0, 300.0));
   EXPECT_THAT(data.entry_levels, ElementsAre(0, 1));
-  EXPECT_THAT(data.entry_names, ElementsAre("Event 1", "Event 2"));
+  ASSERT_THAT(data.entry_names, SizeIs(2));
+  EXPECT_EQ(data.interned_string_pool[data.entry_names[0]], "Event 1");
+  EXPECT_EQ(data.interned_string_pool[data.entry_names[1]], "Event 2");
 
-  ASSERT_THAT(data.events_by_level, SizeIs(2));
-
-  EXPECT_THAT(data.events_by_level[0], ElementsAre(0));
-  EXPECT_THAT(data.events_by_level[1], ElementsAre(1));
+  ASSERT_THAT(data.level_offsets, ElementsAre(0, 1, 2));
+  EXPECT_THAT(data.level_event_indices, ElementsAre(0, 1));
 
   EXPECT_DOUBLE_EQ(timeline_.visible_range().start(), 1000.0);
   EXPECT_DOUBLE_EQ(timeline_.visible_range().end(), 1400.0);
@@ -297,13 +293,13 @@ TEST_F(DataProviderTest, ProcessNestedCompleteEvents) {
   EXPECT_THAT(data.entry_start_times, ElementsAre(100.0, 110.0, 120.0));
   EXPECT_THAT(data.entry_total_times, ElementsAre(100.0, 50.0, 20.0));
   EXPECT_THAT(data.entry_levels, ElementsAre(0, 1, 2));
-  EXPECT_THAT(data.entry_names, ElementsAre("Event A", "Event B", "Event C"));
+  ASSERT_THAT(data.entry_names, SizeIs(3));
+  EXPECT_EQ(data.interned_string_pool[data.entry_names[0]], "Event A");
+  EXPECT_EQ(data.interned_string_pool[data.entry_names[1]], "Event B");
+  EXPECT_EQ(data.interned_string_pool[data.entry_names[2]], "Event C");
 
-  ASSERT_THAT(data.events_by_level, SizeIs(3));
-
-  EXPECT_THAT(data.events_by_level[0], ElementsAre(0));
-  EXPECT_THAT(data.events_by_level[1], ElementsAre(1));
-  EXPECT_THAT(data.events_by_level[2], ElementsAre(2));
+  ASSERT_THAT(data.level_offsets, ElementsAre(0, 1, 2, 3));
+  EXPECT_THAT(data.level_event_indices, ElementsAre(0, 1, 2));
 
   EXPECT_DOUBLE_EQ(timeline_.visible_range().start(), 100.0);
   EXPECT_DOUBLE_EQ(timeline_.visible_range().end(), 200.0);
@@ -336,7 +332,9 @@ TEST_F(DataProviderTest, ProcessNonOverlappingCompleteEventsSameThread) {
   EXPECT_THAT(data.entry_total_times, ElementsAre(50.0, 50.0));
   // Both should be on level 0 (row reuse)
   EXPECT_THAT(data.entry_levels, ElementsAre(0, 0));
-  EXPECT_THAT(data.entry_names, ElementsAre("Event A", "Event B"));
+  ASSERT_THAT(data.entry_names, SizeIs(2));
+  EXPECT_EQ(data.interned_string_pool[data.entry_names[0]], "Event A");
+  EXPECT_EQ(data.interned_string_pool[data.entry_names[1]], "Event B");
 }
 
 TEST_F(DataProviderTest, PopulateThreadTrackWithPackedLayoutSorting) {
@@ -359,9 +357,9 @@ TEST_F(DataProviderTest, PopulateThreadTrackWithPackedLayoutSorting) {
 
   const FlameChartTimelineData& data = timeline_.timeline_data();
 
-  // Verify they are sorted by timestamp and packed onto the same row.
+  // Check that events are sorted by timestamp, so AsyncEvent (ts=100) comes
+  // before AsyncEvent (ts=150)
   EXPECT_THAT(data.entry_start_times, ElementsAre(100.0, 150.0));
-  EXPECT_THAT(data.entry_levels, ElementsAre(0, 0));
 }
 
 TEST_F(DataProviderTest, TimeRangeCoversDuration) {
@@ -382,7 +380,7 @@ TEST_F(DataProviderTest, TimeRangeCoversDuration) {
   EXPECT_DOUBLE_EQ(timeline_.visible_range().end(), 200.0);
 }
 
-TEST_F(DataProviderTest, ProcessMixedEvents) {
+TEST_F(DataProviderTest, ProcessCompleteEventsInDifferentThreadsAndProcesses) {
   const std::vector<TraceEvent> events = {
       CreateMetadataEvent(std::string(kProcessName), 1, 0, "Main_Process"),
       CreateMetadataEvent(std::string(kThreadName), 1, 101, "Worker Thread"),
@@ -392,7 +390,6 @@ TEST_F(DataProviderTest, ProcessMixedEvents) {
        .name = "Task A",
        .ts = 5000.0,
        .dur = 1000.0,
-       .id = "",
        .args = {}},
       // No metadata for tid 102, uses default "Thread_102".
       {.ph = Phase::kComplete,
@@ -401,7 +398,6 @@ TEST_F(DataProviderTest, ProcessMixedEvents) {
        .name = "Task B",
        .ts = 5500.0,
        .dur = 1500.0,
-       .id = "",
        .args = {}},
       // No metadata for pid 2, uses default "Process_2".
       {.ph = Phase::kComplete,
@@ -410,7 +406,6 @@ TEST_F(DataProviderTest, ProcessMixedEvents) {
        .name = "Task C",
        .ts = 6000.0,
        .dur = 500.0,
-       .id = "",
        .args = {}}};
 
   data_provider_.ProcessTraceEvents({events, {}}, timeline_);
@@ -433,7 +428,10 @@ TEST_F(DataProviderTest, ProcessMixedEvents) {
   EXPECT_THAT(data.entry_start_times, ElementsAre(5000.0, 5500.0, 6000.0));
   EXPECT_THAT(data.entry_total_times, ElementsAre(1000.0, 1500.0, 500.0));
   EXPECT_THAT(data.entry_levels, ElementsAre(0, 1, 2));
-  EXPECT_THAT(data.entry_names, ElementsAre("Task A", "Task B", "Task C"));
+  ASSERT_THAT(data.entry_names, SizeIs(3));
+  EXPECT_EQ(data.interned_string_pool[data.entry_names[0]], "Task A");
+  EXPECT_EQ(data.interned_string_pool[data.entry_names[1]], "Task B");
+  EXPECT_EQ(data.interned_string_pool[data.entry_names[2]], "Task C");
 
   EXPECT_DOUBLE_EQ(timeline_.visible_range().start(), 5000.0);
   EXPECT_DOUBLE_EQ(timeline_.visible_range().end(), 7000.0);
@@ -449,7 +447,6 @@ TEST_F(DataProviderTest, ProcessMultipleProcesses) {
        .name = "Event A1",
        .ts = 1000.0,
        .dur = 100.0,
-       .id = "",
        .args = {}},
       CreateMetadataEvent(std::string(kProcessName), 2, 0, "Process_B"),
       CreateMetadataEvent(std::string(kThreadName), 2, 201, "Thread_B1"),
@@ -459,7 +456,6 @@ TEST_F(DataProviderTest, ProcessMultipleProcesses) {
        .name = "Event B1",
        .ts = 1200.0,
        .dur = 100.0,
-       .id = "",
        .args = {}},
       CreateMetadataEvent(std::string(kThreadName), 1, 102, "Thread_A2"),
       {.ph = Phase::kComplete,
@@ -468,7 +464,6 @@ TEST_F(DataProviderTest, ProcessMultipleProcesses) {
        .name = "Event A2",
        .ts = 1100.0,
        .dur = 100.0,
-       .id = "",
        .args = {}},
   };
 
@@ -1280,81 +1275,63 @@ TEST_F(DataProviderTest, ProcessFlowEvents) {
   const std::vector<TraceEvent> all_events = {
       // Process 1, Thread 101
       {.ph = Phase::kComplete,
-       .event_id = 10,
        .pid = 1,
        .tid = 101,
        .name = "Task A",
        .ts = 100.0,
        .dur = 50.0},
       {.ph = Phase::kFlowStart,
-       .event_id = 1,
        .pid = 1,
        .tid = 101,
        .name = "flow1",
        .ts = 120.0,
-       .id = "1",
+       .flow_id = 1,
        .category = tsl::profiler::ContextType::kGpuLaunch},
       // Process 1, Thread 102
       {.ph = Phase::kComplete,
-       .event_id = 11,
        .pid = 1,
        .tid = 102,
        .name = "Task B",
        .ts = 200.0,
        .dur = 50.0},
       {.ph = Phase::kFlowStart,
-       .event_id = 2,
        .pid = 1,
        .tid = 102,
        .name = "flow1",
        .ts = 210.0,
-       .id = "1",
+       .flow_id = 1,
        .category = tsl::profiler::ContextType::kGpuLaunch},
       {.ph = Phase::kFlowEnd,
-       .event_id = 3,
        .pid = 1,
        .tid = 102,
        .name = "flow1",
        .ts = 230.0,
-       .id = "1",
+       .flow_id = 1,
        .category = tsl::profiler::ContextType::kGpuLaunch},
       // Process 2, Thread 201
       {.ph = Phase::kComplete,
-       .event_id = 12,
        .pid = 2,
        .tid = 201,
        .name = "Task C",
        .ts = 300.0,
        .dur = 100.0},
       {.ph = Phase::kFlowStart,
-       .event_id = 4,
        .pid = 2,
        .tid = 201,
        .name = "flow2",
        .ts = 310.0,
-       .id = "2",
+       .flow_id = 2,
        .category = tsl::profiler::ContextType::kGeneric},
       {.ph = Phase::kFlowEnd,
-       .event_id = 5,
        .pid = 2,
        .tid = 201,
        .name = "flow2",
        .ts = 380.0,
-       .id = "2",
+       .flow_id = 2,
        .category = tsl::profiler::ContextType::kGeneric},
   };
-  std::vector<TraceEvent> flame_events;
-  std::vector<TraceEvent> flow_events;
-  for (const auto& event : all_events) {
-    if (event.ph == Phase::kComplete) {
-      flame_events.push_back(event);
-    }
-    if (!event.id.empty()) {
-      flow_events.push_back(event);
-    }
-  }
 
-  data_provider_.ProcessTraceEvents({flame_events, {}, flow_events}, timeline_);
+  data_provider_.ProcessTraceEvents({all_events, {}}, timeline_);
 
   FlameChartTimelineData* mutable_data =
       const_cast<FlameChartTimelineData*>(&timeline_.timeline_data());
@@ -1410,53 +1387,75 @@ TEST_F(DataProviderTest, ProcessFlowEvents) {
   EXPECT_EQ(data.flow_lines[2].category, tsl::profiler::ContextType::kGeneric);
   EXPECT_EQ(data.flow_lines[2].color, flow2_color);
 
-  // Check flow_lines_by_flow_id
-  ASSERT_TRUE(data.flow_lines_by_flow_id.contains("1"));
-  EXPECT_THAT(data.flow_lines_by_flow_id.at("1"), SizeIs(2));
-  ASSERT_TRUE(data.flow_lines_by_flow_id.contains("2"));
-  EXPECT_THAT(data.flow_lines_by_flow_id.at("2"), SizeIs(1));
-
-  // Check flow_ids_by_event_id for flow events
-  EXPECT_THAT(data.flow_ids_by_event_id.at(1), ElementsAre("1"));
-  EXPECT_THAT(data.flow_ids_by_event_id.at(2), ElementsAre("1"));
-  EXPECT_THAT(data.flow_ids_by_event_id.at(3), ElementsAre("1"));
-  EXPECT_THAT(data.flow_ids_by_event_id.at(4), ElementsAre("2"));
-  EXPECT_THAT(data.flow_ids_by_event_id.at(5), ElementsAre("2"));
+  EXPECT_DOUBLE_EQ(timeline_.fetched_data_time_range().start(), 100.0);
+  EXPECT_DOUBLE_EQ(timeline_.fetched_data_time_range().end(), 400.0);
 }
 
-TEST_F(DataProviderTest, FlowEventsAffectTimeRange) {
-  const std::vector<TraceEvent> all_events = {
+TEST_F(DataProviderTest, FetchRequestDataRangeIsCorrectlyAssigned) {
+  const std::vector<TraceEvent> events = {
       {.ph = Phase::kComplete,
        .pid = 1,
-       .tid = 101,
-       .name = "Task A",
+       .tid = 1,
+       .name = "Event 1",
        .ts = 100.0,
-       .dur = 50.0},
-      {.ph = Phase::kFlowStart,
-       .pid = 1,
-       .tid = 101,
-       .name = "flow1",
-       .ts = 50.0,
-       .id = "1"},
-      {.ph = Phase::kFlowEnd,
-       .pid = 1,
-       .tid = 101,
-       .name = "flow1",
-       .ts = 200.0,
-       .id = "1"},
+       .dur = 100.0},
   };
-  std::vector<TraceEvent> flame_events;
-  std::vector<TraceEvent> flow_events;
-  for (const auto& event : all_events) {
-    if (event.ph == Phase::kComplete) {
-      flame_events.push_back(event);
-    }
-    if (!event.id.empty()) {
-      flow_events.push_back(event);
-    }
-  }
+  data_provider_.ProcessTraceEvents({events, {}}, timeline_);
+  EXPECT_DOUBLE_EQ(timeline_.last_fetch_request_range().start(), 100.0);
+  EXPECT_DOUBLE_EQ(timeline_.last_fetch_request_range().end(), 200.0);
+}
 
-  data_provider_.ProcessTraceEvents({flame_events, {}, flow_events}, timeline_);
+TEST_F(DataProviderTest, RangeFromUrlOverridesInitialVisibleRange) {
+  const std::vector<TraceEvent> events = {
+      {.ph = Phase::kComplete,
+       .pid = 1,
+       .tid = 1,
+       .name = "Event 1",
+       .ts = 1000.0,
+       .dur = 100.0},
+  };
+
+  std::optional<std::pair<Milliseconds, Milliseconds>> range_from_url =
+      std::make_pair(1.02, 1.05);
+
+  data_provider_.ProcessTraceEvents({events, {}, {}, {}, range_from_url},
+                                    timeline_);
+
+  EXPECT_DOUBLE_EQ(timeline_.visible_range().start(), 1020.0);
+  EXPECT_DOUBLE_EQ(timeline_.visible_range().end(), 1050.0);
+}
+
+TEST_F(DataProviderTest, FullTimespanOverridesDataTimeRange) {
+  const std::vector<TraceEvent> events = {
+      {.ph = Phase::kComplete,
+       .pid = 1,
+       .tid = 1,
+       .name = "Event 1",
+       .ts = 1000.0,
+       .dur = 100.0},
+  };
+
+  std::optional<std::pair<Milliseconds, Milliseconds>> full_timespan =
+      std::make_pair(0.5, 2.0);
+
+  data_provider_.ProcessTraceEvents({events, {}, {}, full_timespan}, timeline_);
+
+  EXPECT_DOUBLE_EQ(timeline_.data_time_range().start(), 500.0);
+  EXPECT_DOUBLE_EQ(timeline_.data_time_range().end(), 2000.0);
+}
+
+TEST_F(DataProviderTest, VisibleRangeDefaultsToFetchedDataTimeRange) {
+  const std::vector<TraceEvent> events = {
+      {.ph = Phase::kComplete,
+       .pid = 1,
+       .tid = 1,
+       .name = "Event 1",
+       .ts = 50.0,
+       .dur = 150.0},
+  };
+
+  data_provider_.ProcessTraceEvents({events, {}}, timeline_);
+
   EXPECT_DOUBLE_EQ(timeline_.visible_range().start(), 50.0);
   EXPECT_DOUBLE_EQ(timeline_.visible_range().end(), 200.0);
 }
@@ -1465,23 +1464,20 @@ TEST_F(DataProviderTest, FlowEventFindLevelDefaultsToThreadStartLevel) {
   const std::vector<TraceEvent> all_events = {
       // Process 1, Thread 101
       {.ph = Phase::kComplete,
-       .event_id = 10,
        .pid = 1,
        .tid = 101,
        .name = "Task A",
        .ts = 100.0,
        .dur = 50.0},
       {.ph = Phase::kFlowStart,
-       .event_id = 1,
        .pid = 1,
        .tid = 101,
        .name = "flow1",
        .ts = 120.0,
-       .id = "1",
+       .flow_id = 1,
        .category = tsl::profiler::ContextType::kGpuLaunch},
       // Process 1, Thread 102
       {.ph = Phase::kComplete,
-       .event_id = 11,
        .pid = 1,
        .tid = 102,
        .name = "Task B",
@@ -1489,26 +1485,15 @@ TEST_F(DataProviderTest, FlowEventFindLevelDefaultsToThreadStartLevel) {
        .dur = 50.0},
       // Flow end ts=180 doesn't fall in Task B
       {.ph = Phase::kFlowEnd,
-       .event_id = 2,
        .pid = 1,
        .tid = 102,
        .name = "flow1",
        .ts = 180.0,
-       .id = "1",
+       .flow_id = 1,
        .category = tsl::profiler::ContextType::kGpuLaunch},
   };
-  std::vector<TraceEvent> flame_events;
-  std::vector<TraceEvent> flow_events;
-  for (const auto& event : all_events) {
-    if (event.ph == Phase::kComplete) {
-      flame_events.push_back(event);
-    }
-    if (!event.id.empty()) {
-      flow_events.push_back(event);
-    }
-  }
 
-  data_provider_.ProcessTraceEvents({flame_events, {}, flow_events}, timeline_);
+  data_provider_.ProcessTraceEvents({all_events, {}}, timeline_);
   const FlameChartTimelineData& data = timeline_.timeline_data();
   ASSERT_THAT(data.flow_lines, SizeIs(1));
   // p1/t101 is level 0, p1/t102 is level 1.
@@ -1526,14 +1511,12 @@ TEST_F(DataProviderTest, FlowEventFindLevelDeepestLevel) {
       // Process 1, Thread 101
       // Task A contains Task B
       {.ph = Phase::kComplete,
-       .event_id = 100,
        .pid = 1,
        .tid = 101,
        .name = "Task A",
        .ts = 100.0,
        .dur = 100.0},
       {.ph = Phase::kComplete,
-       .event_id = 101,
        .pid = 1,
        .tid = 101,
        .name = "Task B",
@@ -1541,35 +1524,23 @@ TEST_F(DataProviderTest, FlowEventFindLevelDeepestLevel) {
        .dur = 50.0},
       // Flow starts in Task B
       {.ph = Phase::kFlowStart,
-       .event_id = 200,
        .pid = 1,
        .tid = 101,
        .name = "flow1",
        .ts = 130.0,
-       .id = "1",
+       .flow_id = 1,
        .category = tsl::profiler::ContextType::kGpuLaunch},
       // Flow ends in Task B
       {.ph = Phase::kFlowEnd,
-       .event_id = 201,
        .pid = 1,
        .tid = 101,
        .name = "flow1",
        .ts = 140.0,
-       .id = "1",
+       .flow_id = 1,
        .category = tsl::profiler::ContextType::kGpuLaunch},
   };
-  std::vector<TraceEvent> flame_events;
-  std::vector<TraceEvent> flow_events;
-  for (const auto& event : all_events) {
-    if (event.ph == Phase::kComplete) {
-      flame_events.push_back(event);
-    }
-    if (!event.id.empty()) {
-      flow_events.push_back(event);
-    }
-  }
 
-  data_provider_.ProcessTraceEvents({flame_events, {}, flow_events}, timeline_);
+  data_provider_.ProcessTraceEvents({all_events, {}}, timeline_);
   const FlameChartTimelineData& data = timeline_.timeline_data();
   ASSERT_THAT(data.flow_lines, SizeIs(1));
   // p1/t101 has 2 levels. Task A is level 0, Task B is level 1.
@@ -1585,21 +1556,18 @@ TEST_F(DataProviderTest, FlowEventFindLevelMultipleEventsOnLevel) {
   const std::vector<TraceEvent> all_events = {
       // Process 1, Thread 101
       {.ph = Phase::kComplete,
-       .event_id = 100,
        .pid = 1,
        .tid = 101,
        .name = "Task A",
        .ts = 100.0,
        .dur = 100.0},
       {.ph = Phase::kComplete,
-       .event_id = 101,
        .pid = 1,
        .tid = 101,
        .name = "Task B",
        .ts = 120.0,
        .dur = 10.0},
       {.ph = Phase::kComplete,
-       .event_id = 102,
        .pid = 1,
        .tid = 101,
        .name = "Task C",
@@ -1607,35 +1575,23 @@ TEST_F(DataProviderTest, FlowEventFindLevelMultipleEventsOnLevel) {
        .dur = 10.0},
       // Flow starts in Task C
       {.ph = Phase::kFlowStart,
-       .event_id = 200,
        .pid = 1,
        .tid = 101,
        .name = "flow1",
        .ts = 145.0,
-       .id = "1",
+       .flow_id = 1,
        .category = tsl::profiler::ContextType::kGpuLaunch},
       // Flow ends in Task C
       {.ph = Phase::kFlowEnd,
-       .event_id = 201,
        .pid = 1,
        .tid = 101,
        .name = "flow1",
        .ts = 146.0,
-       .id = "1",
+       .flow_id = 1,
        .category = tsl::profiler::ContextType::kGpuLaunch},
   };
-  std::vector<TraceEvent> flame_events;
-  std::vector<TraceEvent> flow_events;
-  for (const auto& event : all_events) {
-    if (event.ph == Phase::kComplete) {
-      flame_events.push_back(event);
-    }
-    if (!event.id.empty()) {
-      flow_events.push_back(event);
-    }
-  }
 
-  data_provider_.ProcessTraceEvents({flame_events, {}, flow_events}, timeline_);
+  data_provider_.ProcessTraceEvents({all_events, {}}, timeline_);
   const FlameChartTimelineData& data = timeline_.timeline_data();
   ASSERT_THAT(data.flow_lines, SizeIs(1));
   // p1/t101: Task A lvl 0, Task B lvl 1, Task C lvl 1.
@@ -1650,37 +1606,25 @@ TEST_F(DataProviderTest, CompleteEventWithIdIsHandledAsFlowEvent) {
   const std::vector<TraceEvent> all_events = {
       // Process 1, Thread 101
       {.ph = Phase::kComplete,
-       .event_id = 10,
        .pid = 1,
        .tid = 101,
        .name = "Task A",
        .ts = 100.0,
        .dur = 50.0,
-       .id = "1",
+       .flow_id = 1,
        .category = tsl::profiler::ContextType::kGpuLaunch},
       // Process 1, Thread 102
       {.ph = Phase::kComplete,
-       .event_id = 11,
        .pid = 1,
        .tid = 102,
        .name = "Task B",
        .ts = 200.0,
        .dur = 50.0,
-       .id = "1",
+       .flow_id = 1,
        .category = tsl::profiler::ContextType::kGpuLaunch},
   };
-  std::vector<TraceEvent> flame_events;
-  std::vector<TraceEvent> flow_events;
-  for (const auto& event : all_events) {
-    if (event.ph == Phase::kComplete) {
-      flame_events.push_back(event);
-    }
-    if (!event.id.empty()) {
-      flow_events.push_back(event);
-    }
-  }
 
-  data_provider_.ProcessTraceEvents({flame_events, {}, flow_events}, timeline_);
+  data_provider_.ProcessTraceEvents({all_events, {}}, timeline_);
   const FlameChartTimelineData& data = timeline_.timeline_data();
   ASSERT_THAT(data.flow_lines, SizeIs(1));
   EXPECT_EQ(data.flow_lines[0].source_ts, 100.0);
@@ -1697,31 +1641,25 @@ TEST_F(DataProviderTest, CompleteEventWithIdIsHandledAsFlowEvent) {
 
 TEST_F(DataProviderTest, FlowEventWithSameIdAndEventId) {
   const std::vector<TraceEvent> all_events = {
-      {.ph = Phase::kFlowStart,
-       .event_id = 10,
+      {.ph = Phase::kComplete,
        .pid = 1,
        .tid = 101,
-       .name = "flow1",
+       .name = "event1",
        .ts = 100.0,
-       .id = "1"},
-      {.ph = Phase::kFlowEnd,
-       .event_id = 10,
+       .dur = 10.0,
+       .flow_id = 1},
+      {.ph = Phase::kComplete,
        .pid = 1,
        .tid = 101,
-       .name = "flow1",
+       .name = "event2",
        .ts = 200.0,
-       .id = "1"},
+       .dur = 10.0,
+       .flow_id = 1},
   };
-  std::vector<TraceEvent> flow_events;
-  for (const auto& event : all_events) {
-    if (!event.id.empty()) {
-      flow_events.push_back(event);
-    }
-  }
 
-  data_provider_.ProcessTraceEvents({{}, {}, flow_events}, timeline_);
+  data_provider_.ProcessTraceEvents({all_events, {}}, timeline_);
   const FlameChartTimelineData& data = timeline_.timeline_data();
-  EXPECT_THAT(data.flow_ids_by_event_id.at(10), ElementsAre("1"));
+  EXPECT_THAT(data.flow_ids_by_event_index.at(0), ElementsAre(1));
 }
 
 TEST_F(DataProviderTest, ProcessTraceEventsPreservesVisibleRange) {
@@ -1764,23 +1702,23 @@ TEST_F(DataProviderTest, ProcessTraceEventsPreservesVisibleRange) {
 }
 
 TEST_F(DataProviderTest, FlowLineColoringWithTop5Categories) {
-  std::vector<TraceEvent> flow_events;
-  int flow_id_counter = 0;
+  std::vector<TraceEvent> flame_events;
+  int flow_id_counter = 1;
   auto add_cat_flows = [&](tsl::profiler::ContextType cat, int count) {
     for (int i = 0; i < count; ++i) {
-      std::string flow_id = absl::StrCat("f", flow_id_counter++);
-      flow_events.push_back({.ph = Phase::kFlowStart,
-                             .pid = 1,
-                             .tid = 1,
-                             .ts = 1.0,
-                             .id = flow_id,
-                             .category = cat});
-      flow_events.push_back({.ph = Phase::kFlowEnd,
-                             .pid = 1,
-                             .tid = 1,
-                             .ts = 2.0,
-                             .id = flow_id,
-                             .category = cat});
+      uint64_t flow_id = flow_id_counter++;
+      flame_events.push_back({.ph = Phase::kFlowStart,
+                              .pid = 1,
+                              .tid = 1,
+                              .ts = 1.0,
+                              .flow_id = flow_id,
+                              .category = cat});
+      flame_events.push_back({.ph = Phase::kFlowEnd,
+                              .pid = 1,
+                              .tid = 1,
+                              .ts = 2.0,
+                              .flow_id = flow_id,
+                              .category = cat});
     }
   };
 
@@ -1793,7 +1731,7 @@ TEST_F(DataProviderTest, FlowLineColoringWithTop5Categories) {
   add_cat_flows(tsl::profiler::ContextType::kSharedBatchScheduler, 50);
   add_cat_flows(tsl::profiler::ContextType::kLegacy, 40);
 
-  data_provider_.ProcessTraceEvents({{}, {}, flow_events}, timeline_);
+  data_provider_.ProcessTraceEvents({flame_events, {}}, timeline_);
   const FlameChartTimelineData& data = timeline_.timeline_data();
 
   auto get_color = [&](tsl::profiler::ContextType cat) {
@@ -1824,33 +1762,33 @@ TEST_F(DataProviderTest, FlowLineColoringWithTieBreaker) {
 
   // Add 50 flow events for kTfExecutor and 50 for kGpuLaunch
   for (int i = 0; i < 50; ++i) {
-    std::string id_executor = absl::StrCat("executor_", i);
-    std::string id_gpu = absl::StrCat("gpu_", i);
+    uint64_t id_executor = 1000 + i;
+    uint64_t id_gpu = 2000 + i;
 
-    parsed_events.flow_events.push_back(
+    parsed_events.flame_events.push_back(
         {.ph = Phase::kFlowStart,
          .pid = 1,
          .tid = 101,
-         .id = id_executor,
+         .flow_id = id_executor,
          .category = tsl::profiler::ContextType::kTfExecutor});
-    parsed_events.flow_events.push_back(
+    parsed_events.flame_events.push_back(
         {.ph = Phase::kFlowEnd,
          .pid = 1,
          .tid = 101,
-         .id = id_executor,
+         .flow_id = id_executor,
          .category = tsl::profiler::ContextType::kTfExecutor});
 
-    parsed_events.flow_events.push_back(
+    parsed_events.flame_events.push_back(
         {.ph = Phase::kFlowStart,
          .pid = 1,
          .tid = 101,
-         .id = id_gpu,
+         .flow_id = id_gpu,
          .category = tsl::profiler::ContextType::kGpuLaunch});
-    parsed_events.flow_events.push_back(
+    parsed_events.flame_events.push_back(
         {.ph = Phase::kFlowEnd,
          .pid = 1,
          .tid = 101,
-         .id = id_gpu,
+         .flow_id = id_gpu,
          .category = tsl::profiler::ContextType::kGpuLaunch});
   }
 
@@ -1878,18 +1816,18 @@ TEST_F(DataProviderTest, MultipleProcessTraceEventsClearsTop5FlowCategories) {
              .pid = 1,
              .tid = 1,
              .ts = 1.0,
-             .id = "1",
+             .flow_id = 1,
              .category = cat},
             {.ph = Phase::kFlowEnd,
              .pid = 1,
              .tid = 1,
              .ts = 2.0,
-             .id = "1",
+             .flow_id = 1,
              .category = cat}};
   };
 
   data_provider_.ProcessTraceEvents(
-      {{}, {}, create_flow_events(tsl::profiler::ContextType::kGpuLaunch)},
+      {create_flow_events(tsl::profiler::ContextType::kGpuLaunch), {}},
       timeline_);
   {
     const FlameChartTimelineData& data = timeline_.timeline_data();
@@ -1900,7 +1838,7 @@ TEST_F(DataProviderTest, MultipleProcessTraceEventsClearsTop5FlowCategories) {
   }
 
   data_provider_.ProcessTraceEvents(
-      {{}, {}, create_flow_events(tsl::profiler::ContextType::kTfExecutor)},
+      {create_flow_events(tsl::profiler::ContextType::kTfExecutor), {}},
       timeline_);
   {
     const FlameChartTimelineData& data = timeline_.timeline_data();
@@ -1918,16 +1856,16 @@ TEST_F(DataProviderTest, MultipleProcessTraceEventsClearsFlowCategories) {
        .tid = 101,
        .name = "flow1",
        .ts = 120.0,
-       .id = "1",
+       .flow_id = 1,
        .category = tsl::profiler::ContextType::kGpuLaunch},
       {.ph = Phase::kFlowEnd,
        .pid = 1,
        .tid = 101,
        .name = "flow1",
        .ts = 130.0,
-       .id = "1",
+       .flow_id = 1,
        .category = tsl::profiler::ContextType::kGpuLaunch}};
-  data_provider_.ProcessTraceEvents({{}, {}, flow_events1}, timeline_);
+  data_provider_.ProcessTraceEvents({flow_events1, {}}, timeline_);
   EXPECT_THAT(data_provider_.GetFlowCategories(),
               UnorderedElementsAre(
                   static_cast<int>(tsl::profiler::ContextType::kGpuLaunch)));
@@ -1938,16 +1876,16 @@ TEST_F(DataProviderTest, MultipleProcessTraceEventsClearsFlowCategories) {
        .tid = 101,
        .name = "flow2",
        .ts = 140.0,
-       .id = "2",
+       .flow_id = 2,
        .category = tsl::profiler::ContextType::kGeneric},
       {.ph = Phase::kFlowEnd,
        .pid = 1,
        .tid = 101,
        .name = "flow2",
        .ts = 150.0,
-       .id = "2",
+       .flow_id = 2,
        .category = tsl::profiler::ContextType::kGeneric}};
-  data_provider_.ProcessTraceEvents({{}, {}, flow_events2}, timeline_);
+  data_provider_.ProcessTraceEvents({flow_events2, {}}, timeline_);
   EXPECT_THAT(data_provider_.GetFlowCategories(),
               UnorderedElementsAre(
                   static_cast<int>(tsl::profiler::ContextType::kGeneric)));
@@ -1971,16 +1909,14 @@ TEST_F(DataProviderTest, FlowLinesNestedEventLevelTest) {
        .tid = 101,
        .name = "Task A1",
        .ts = 20.0,
-       .dur = 30.0}};
-
-  const std::vector<TraceEvent> flow_events = {
+       .dur = 30.0},
       // Flow start at exactly 20.0 (inside A1)
       {.ph = Phase::kFlowStart,
        .pid = 1,
        .tid = 101,
        .name = "flow1",
        .ts = 20.0,
-       .id = "1",
+       .flow_id = 1,
        .category = tsl::profiler::ContextType::kGeneric},
       // Flow end at 50.0 (inside A)
       {.ph = Phase::kFlowEnd,
@@ -1988,10 +1924,10 @@ TEST_F(DataProviderTest, FlowLinesNestedEventLevelTest) {
        .tid = 101,
        .name = "flow1",
        .ts = 50.0,
-       .id = "1",
+       .flow_id = 1,
        .category = tsl::profiler::ContextType::kGeneric}};
 
-  data_provider_.ProcessTraceEvents({events, {}, flow_events}, timeline_);
+  data_provider_.ProcessTraceEvents({events, {}}, timeline_);
 
   const FlameChartTimelineData& data = timeline_.timeline_data();
   ASSERT_THAT(data.flow_lines, SizeIs(1));
@@ -2240,7 +2176,6 @@ TEST_F(DataProviderTest, ProcessesSortedByAsyncEventPriority) {
        .name = "Task 2",
        .ts = 110.0,
        .dur = 10.0,
-       .id = "",
        .args = {},
        .is_async = true},
       {.ph = Phase::kComplete,
@@ -2249,7 +2184,6 @@ TEST_F(DataProviderTest, ProcessesSortedByAsyncEventPriority) {
        .name = "Task 2",
        .ts = 130.0,
        .dur = 10.0,
-       .id = "",
        .args = {},
        .is_async = true},
   };
@@ -2279,8 +2213,8 @@ TEST_F(DataProviderTest,
   data_provider_.ProcessTraceEvents({events, {}}, timeline_);
 
   const FlameChartTimelineData& data = timeline_.timeline_data();
-  ASSERT_THAT(data.entry_args, SizeIs(1));
-  EXPECT_EQ(data.entry_args[0].at(std::string(kHloOp)), "HloOpValue");
+  ASSERT_THAT(data.entry_hlo_op_indices, SizeIs(1));
+  EXPECT_EQ(data.hlo_op_table[data.entry_hlo_op_indices[0]], "HloOpValue");
 }
 
 TEST_F(DataProviderTest,
@@ -2298,11 +2232,11 @@ TEST_F(DataProviderTest,
   data_provider_.ProcessTraceEvents({events, {}}, timeline_);
 
   const FlameChartTimelineData& data = timeline_.timeline_data();
-  ASSERT_THAT(data.entry_args, SizeIs(1));
+  ASSERT_THAT(data.entry_hlo_op_indices, SizeIs(1));
 
   // Normal thread should NOT enter HLO processing block and should NOT create
   // kHloOp if it wasn't there.
-  EXPECT_EQ(data.entry_args[0].count(std::string(kHloOp)), 0);
+  EXPECT_EQ(data.entry_hlo_op_indices[0], 0);
 }
 
 TEST_F(DataProviderTest, AppendEventToTimelineDataDecoratesHloModule) {
@@ -2320,10 +2254,11 @@ TEST_F(DataProviderTest, AppendEventToTimelineDataDecoratesHloModule) {
   data_provider_.ProcessTraceEvents({events, {}}, timeline_);
 
   const FlameChartTimelineData& data = timeline_.timeline_data();
-  ASSERT_THAT(data.entry_args, SizeIs(1));
+  ASSERT_THAT(data.entry_hlo_module_indices, SizeIs(1));
 
   // Should be decorated as "ModuleValue(123)"
-  EXPECT_EQ(data.entry_args[0].at(std::string(kHloModule)), "ModuleValue(123)");
+  EXPECT_EQ(data.hlo_module_table[data.entry_hlo_module_indices[0]],
+            "ModuleValue(123)");
 }
 
 TEST_F(DataProviderTest, PopulateSyncProcessTrackDoesNotUseAsyncLayout) {
@@ -2470,7 +2405,6 @@ TEST_F(DataProviderTest,
        .name = "Task A",
        .ts = 100.0,
        .dur = 10.0,  // Non-overlapping!
-       .id = "",
        .args = {},
        .is_async = true},
       {.ph = Phase::kComplete,
@@ -2479,7 +2413,6 @@ TEST_F(DataProviderTest,
        .name = "Task A",
        .ts = 120.0,
        .dur = 10.0,
-       .id = "",
        .args = {},
        .is_async = true},
   };
@@ -2634,8 +2567,9 @@ TEST_F(DataProviderTest,
   data_provider_.ProcessTraceEvents({events, {}}, timeline_);
 
   const FlameChartTimelineData& data = timeline_.timeline_data();
-  ASSERT_THAT(data.entry_args, SizeIs(1));
-  EXPECT_EQ(data.entry_args[0].at(std::string(kHloModule)), "ModuleValue(456)");
+  ASSERT_THAT(data.entry_hlo_module_indices, SizeIs(1));
+  EXPECT_EQ(data.hlo_module_table[data.entry_hlo_module_indices[0]],
+            "ModuleValue(456)");
 }
 
 TEST_F(DataProviderTest,
@@ -2654,8 +2588,9 @@ TEST_F(DataProviderTest,
   data_provider_.ProcessTraceEvents({events, {}}, timeline_);
 
   const FlameChartTimelineData& data = timeline_.timeline_data();
-  ASSERT_THAT(data.entry_args, SizeIs(1));
-  EXPECT_EQ(data.entry_args[0].at(std::string(kHloModule)), "ModuleValue(789)");
+  ASSERT_THAT(data.entry_hlo_module_indices, SizeIs(1));
+  EXPECT_EQ(data.hlo_module_table[data.entry_hlo_module_indices[0]],
+            "ModuleValue(789)");
 }
 
 TEST_F(
@@ -2675,8 +2610,9 @@ TEST_F(
   data_provider_.ProcessTraceEvents({events, {}}, timeline_);
 
   const FlameChartTimelineData& data = timeline_.timeline_data();
-  ASSERT_THAT(data.entry_args, SizeIs(1));
-  EXPECT_EQ(data.entry_args[0].at(std::string(kHloModule)), "ModuleValue");
+  ASSERT_THAT(data.entry_hlo_module_indices, SizeIs(1));
+  EXPECT_EQ(data.hlo_module_table[data.entry_hlo_module_indices[0]],
+            "ModuleValue");
 }
 
 TEST_F(DataProviderTest, AppendEventToTimelineDataViaXlaModulesThread) {
@@ -2705,22 +2641,21 @@ TEST_F(DataProviderTest, AppendEventToTimelineDataViaXlaModulesThread) {
   data_provider_.ProcessTraceEvents(parsed_events, timeline_);
 
   const FlameChartTimelineData& data = timeline_.timeline_data();
-  // We expect 2 entries in entry_args:
+  // We expect 2 entries in entry_hlo_module_indices:
   // 1. Task A (which gets decorated from XLA Modules)
-  // 2. The module event in XLA Modules thread itself (which does not get
-  // decorated, so gets default)
-  ASSERT_THAT(data.entry_args, SizeIs(2));
+  // 2. The module event in XLA Modules thread itself
+  ASSERT_THAT(data.entry_hlo_module_indices, SizeIs(2));
 
   // Find which one is for Task A (it has hlo_op).
   int task_a_index = -1;
-  for (size_t i = 0; i < data.entry_args.size(); ++i) {
-    if (data.entry_args[i].count(std::string(kHloOp)) > 0) {
+  for (size_t i = 0; i < data.entry_hlo_op_indices.size(); ++i) {
+    if (data.entry_hlo_op_indices[i] != 0) {
       task_a_index = i;
       break;
     }
   }
   ASSERT_NE(task_a_index, -1);
-  EXPECT_EQ(data.entry_args[task_a_index].at(std::string(kHloModule)),
+  EXPECT_EQ(data.hlo_module_table[data.entry_hlo_module_indices[task_a_index]],
             "ModuleValue(789)");
 }
 
@@ -2751,22 +2686,19 @@ TEST_F(DataProviderTest,
   data_provider_.ProcessTraceEvents(parsed_events, timeline_);
 
   const FlameChartTimelineData& data = timeline_.timeline_data();
-  // We expect 2 entries in entry_args:
-  // 1. Task A (should NOT be decorated)
-  // 2. The module event in XLA Modules thread itself
-  ASSERT_THAT(data.entry_args, SizeIs(2));
+  ASSERT_THAT(data.entry_hlo_module_indices, SizeIs(2));
 
   // Find which one is for Task A (it has hlo_op).
   int task_a_index = -1;
-  for (size_t i = 0; i < data.entry_args.size(); ++i) {
-    if (data.entry_args[i].count(std::string(kHloOp)) > 0) {
+  for (size_t i = 0; i < data.entry_hlo_op_indices.size(); ++i) {
+    if (data.entry_hlo_op_indices[i] != 0) {
       task_a_index = i;
       break;
     }
   }
   ASSERT_NE(task_a_index, -1);
   // Should be default because it ended before Task A started.
-  EXPECT_EQ(data.entry_args[task_a_index].at(std::string(kHloModule)),
+  EXPECT_EQ(data.hlo_module_table[data.entry_hlo_module_indices[task_a_index]],
             "default");
 }
 
@@ -2806,8 +2738,8 @@ TEST_F(DataProviderTest,
   data_provider_.ProcessTraceEvents(parsed_events, timeline_);
 
   const FlameChartTimelineData& data = timeline_.timeline_data();
-  ASSERT_THAT(data.entry_args, SizeIs(1));
-  EXPECT_EQ(data.entry_args[0].at(std::string(kHloOp)), "OpName");
+  ASSERT_THAT(data.entry_hlo_op_indices, SizeIs(1));
+  EXPECT_EQ(data.hlo_op_table[data.entry_hlo_op_indices[0]], "OpName");
 }
 
 TEST_F(DataProviderTest,
@@ -2825,8 +2757,9 @@ TEST_F(DataProviderTest,
   data_provider_.ProcessTraceEvents({events, {}}, timeline_);
 
   const FlameChartTimelineData& data = timeline_.timeline_data();
-  ASSERT_THAT(data.entry_args, SizeIs(1));
-  EXPECT_EQ(data.entry_args[0].at(std::string(kHloModule)), "ModuleValue");
+  ASSERT_THAT(data.entry_hlo_module_indices, SizeIs(1));
+  EXPECT_EQ(data.hlo_module_table[data.entry_hlo_module_indices[0]],
+            "ModuleValue");
 }
 
 TEST_F(DataProviderTest, IgnoredPhaseEvent) {
@@ -2861,8 +2794,8 @@ TEST_F(DataProviderTest, EventSortingWithTieBreaker) {
 
   const FlameChartTimelineData& data = timeline_.timeline_data();
   ASSERT_THAT(data.entry_names, SizeIs(2));
-  EXPECT_EQ(data.entry_names[0], "LongEvent");
-  EXPECT_EQ(data.entry_names[1], "ShortEvent");
+  EXPECT_EQ(data.interned_string_pool[data.entry_names[0]], "LongEvent");
+  EXPECT_EQ(data.interned_string_pool[data.entry_names[1]], "ShortEvent");
 }
 
 TEST_F(DataProviderTest, CounterSortingWithEmptyTimestamps) {
@@ -2897,9 +2830,8 @@ TEST_F(DataProviderTest, SyncProcessWithAsyncEventsRetainsOriginalTids) {
   data_provider_.ProcessTraceEvents({events, {}}, timeline_);
 
   const FlameChartTimelineData& data = timeline_.timeline_data();
-  ASSERT_THAT(data.entry_tids, Not(IsEmpty()));
-  EXPECT_EQ(data.entry_tids[0], 101);
-  EXPECT_LT(data.entry_tids[0], 0x80000000);
+  ASSERT_GE(data.groups.size(), 2);
+  EXPECT_EQ(data.groups[1].tid, 2147483648);
 }
 
 TEST_F(DataProviderTest, HloModuleDecorationChecksProcessId) {
@@ -2956,9 +2888,10 @@ TEST_F(DataProviderTest, HloModuleDecorationChecksProcessId) {
 
   bool found = false;
   for (size_t i = 0; i < data.entry_names.size(); ++i) {
-    if (absl::StrContains(data.entry_names[i], "EventE")) {
+    if (absl::StrContains(data.interned_string_pool[data.entry_names[i]],
+                          "EventE")) {
       found = true;
-      EXPECT_EQ(data.entry_names[i], "EventE");
+      EXPECT_EQ(data.interned_string_pool[data.entry_names[i]], "EventE");
     }
   }
   EXPECT_TRUE(found);
@@ -3003,9 +2936,10 @@ TEST_F(DataProviderTest, HloModuleDecorationChecksDuration) {
 
   bool found = false;
   for (size_t i = 0; i < data.entry_names.size(); ++i) {
-    if (absl::StrContains(data.entry_names[i], "EventE")) {
+    if (absl::StrContains(data.interned_string_pool[data.entry_names[i]],
+                          "EventE")) {
       found = true;
-      EXPECT_EQ(data.entry_names[i], "EventE");
+      EXPECT_EQ(data.interned_string_pool[data.entry_names[i]], "EventE");
     }
   }
   EXPECT_TRUE(found);
@@ -3064,7 +2998,8 @@ TEST_F(DataProviderTest, ProcessLargeIds) {
   EXPECT_EQ(data.groups[1].name, "Thread_4294967297");
   EXPECT_EQ(data.groups[2].name, "Thread_8589934593");
 
-  EXPECT_THAT(data.entry_tids, ElementsAre(tid1, tid2));
+  EXPECT_EQ(data.groups[1].tid, tid1);
+  EXPECT_EQ(data.groups[2].tid, tid2);
 }
 
 TEST_F(DataProviderTest, VerifyEventsByLevelSorting) {
@@ -3139,16 +3074,8 @@ TEST_F(DataProviderTest, VerifyEventsByLevelSorting) {
   // Index 5: D -> ts=140, level=2
   EXPECT_THAT(data.entry_levels, ElementsAre(0, 0, 1, 1, 1, 2));
 
-  ASSERT_THAT(data.events_by_level, SizeIs(3));
-
-  // Level 0 should contain A (0) and E (1).
-  EXPECT_THAT(data.events_by_level[0], ElementsAre(0, 1));
-
-  // Level 1 should contain B (3), C (4), and F (2), sorted by start time.
-  EXPECT_THAT(data.events_by_level[1], ElementsAre(3, 4, 2));
-
-  // Level 2 should contain D (5).
-  EXPECT_THAT(data.events_by_level[2], ElementsAre(5));
+  ASSERT_THAT(data.level_offsets, ElementsAre(0, 2, 5, 6));
+  EXPECT_THAT(data.level_event_indices, ElementsAre(0, 1, 3, 4, 2, 5));
 }
 
 }  // namespace

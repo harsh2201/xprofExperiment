@@ -7,9 +7,7 @@
 
 #include "absl/base/no_destructor.h"
 #include "absl/container/flat_hash_map.h"
-#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
-#include "tsl/platform/fingerprint.h"
 #include "tsl/profiler/lib/context_types.h"
 #include "frontend/app/components/trace_viewer_v2/trace_helper/trace_event.h"
 #include "plugin/xprof/protobuf/trace_data_response.pb.h"
@@ -152,10 +150,11 @@ void ProcessCompleteEvents(const xprof::TraceDataResponse& response,
       ev.ts = current_ts_ps / 1000000.0;
       ev.dur = series.durations(i) / 1000000.0;
       ev.name = response.interned_strings(series.name_refs(i));
+      ev.name_index = series.name_refs(i);
 
       const auto& ev_meta = series.event_metadata(i);
       if (ev_meta.flow_id() != 0) {
-        ev.id = std::to_string(ev_meta.flow_id());
+        ev.flow_id = ev_meta.flow_id();
         if (ev_meta.flow_category() != 0) {
           ev.category = GetContextTypeFromString(
               response.interned_strings(ev_meta.flow_category()));
@@ -163,12 +162,6 @@ void ProcessCompleteEvents(const xprof::TraceDataResponse& response,
       }
 
       ev.args["uid"] = std::to_string(ev_meta.serial());
-      ev.event_id =
-          tsl::Fingerprint64(absl::StrCat(ev.name, ":", ev.ts, ":", ev.dur));
-
-      if (!ev.id.empty()) {
-        result.flow_events.push_back(ev);
-      }
       result.flame_events.push_back(std::move(ev));
     }
   }
@@ -176,7 +169,7 @@ void ProcessCompleteEvents(const xprof::TraceDataResponse& response,
 
 void ProcessAsyncEvents(const xprof::TraceDataResponse& response,
                         ParsedTraceEvents& result) {
-  absl::flat_hash_map<std::pair<ProcessId, std::string>, TraceEvent>
+  absl::flat_hash_map<std::pair<ProcessId, uint64_t>, TraceEvent>
       open_async_events;
 
   for (const auto& series : response.async_events()) {
@@ -186,7 +179,7 @@ void ProcessAsyncEvents(const xprof::TraceDataResponse& response,
       current_ts_ps += series.deltas(i);
       const auto& ev_meta = series.event_metadata(i);
       if (ev_meta.flow_id() != 0) {
-        std::string flow_id_str = std::to_string(ev_meta.flow_id());
+        uint64_t flow_id = ev_meta.flow_id();
         tsl::profiler::ContextType category =
             tsl::profiler::ContextType::kGeneric;
         if (ev_meta.flow_category() != 0) {
@@ -203,7 +196,8 @@ void ProcessAsyncEvents(const xprof::TraceDataResponse& response,
         ev.pid = metadata.process_id();
         ev.ts = current_ts_ps / 1000000.0;
         ev.name = response.interned_strings(series.metadata().name_ref());
-        ev.id = flow_id_str;
+        ev.name_index = series.metadata().name_ref();
+        ev.flow_id = flow_id;
         ev.category = category;
         ev.args["uid"] = std::to_string(ev_meta.serial());
         if (ev_meta.group_id() != 0) {
@@ -215,12 +209,10 @@ void ProcessAsyncEvents(const xprof::TraceDataResponse& response,
           ev.dur = dur;
           ev.ph = Phase::kComplete;
           ev.is_async = true;
-          ev.event_id = tsl::Fingerprint64(
-              absl::StrCat(ev.name, ":", ev.ts, ":", ev.dur));
           result.flame_events.push_back(std::move(ev));
         } else {
           // No duration, assume it's part of a separate Begin/End pair.
-          auto key = std::make_pair(ev.pid, ev.id);
+          auto key = std::make_pair(ev.pid, ev.flow_id);
           auto it = open_async_events.find(key);
           if (it == open_async_events.end()) {
             // Begin
@@ -237,8 +229,6 @@ void ProcessAsyncEvents(const xprof::TraceDataResponse& response,
             if (!ev.args.empty()) {
               begin_ev.args.insert(ev.args.begin(), ev.args.end());
             }
-            begin_ev.event_id = tsl::Fingerprint64(absl::StrCat(
-                begin_ev.name, ":", begin_ev.ts, ":", begin_ev.dur));
             result.flame_events.push_back(std::move(begin_ev));
             open_async_events.erase(it);
           }
