@@ -135,3 +135,13 @@ py_test(
         "@org_xprof//plugin/xprof/cli/internal/oss:xprof_client",
     ],
 )
+
+py_test(
+    name = "detect_reduce_convert_tool_test",
+    srcs = ["detect_reduce_convert_tool_test.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@absl_py//absl/testing:absltest",
+        "@org_xprof//plugin/xprof/cli/tools:detect_reduce_convert_tool",
+    ],
+)

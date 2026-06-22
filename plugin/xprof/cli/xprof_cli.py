@@ -14,6 +14,7 @@ from xprof.cli.internal import xprof_data
 from xprof.cli.internal.oss import hlo_tools
 from xprof.cli.internal.oss import xplane_tools
 from xprof.cli.internal.oss import xprof_client
+from xprof.cli.tools import detect_reduce_convert_tool
 from xprof.cli.tools import detect_unfused_reshapes_tool
 from xprof.cli.tools import get_graph_viewer_tool
 from xprof.cli.tools import get_kpi_metrics_tool
@@ -35,6 +36,7 @@ def cli_main() -> dict[str, Any]:
   return {
       # Standard tools to be exposed as skills through CLI.
       # keep-sorted start
+      "detect_reduce_convert": detect_reduce_convert_tool.detect_reduce_convert,
       "detect_unfused_reshapes": (
           detect_unfused_reshapes_tool.detect_unfused_reshapes
       ),
