@@ -7020,6 +7020,79 @@ TEST_F(MockTimelineImGuiFixture,
   EXPECT_EQ(timeline_.CallFindFirstVisibleAncestorIndex(2), 1);
 }
 
+class TimelineTimeRangeResizeTest : public RealTimelineImGuiFixture {
+ protected:
+  void SetUp() override {
+    RealTimelineImGuiFixture::SetUp();
+    // Set a visible range and data range for predictable testing.
+    timeline_.set_data_time_range({0.0, 10000.0});
+    timeline_.SetVisibleRange({0.0, 1000.0});
+
+    // Run one frame to initialize layout.
+    SimulateFrame();
+  }
+
+  void AddSelectedTimeRange(Microseconds start, Microseconds end) {
+    timeline_.AddSelectedTimeRange(TimeRange(start, end));
+  }
+
+  void Drag(Microseconds from_time, Microseconds to_time) {
+    ImGuiIO& io = ImGui::GetIO();
+    float timeline_origin_x = GetTimelineStartX();
+    double px_per_time = timeline_.px_per_time_unit();
+    if (px_per_time <= 0) px_per_time = 1.0;
+
+    float from_x =
+        timeline_.TimeToScreenX(from_time, timeline_origin_x, px_per_time);
+    float to_x =
+        timeline_.TimeToScreenX(to_time, timeline_origin_x, px_per_time);
+
+    io.AddMousePosEvent(from_x, 50.0f);
+    io.AddMouseButtonEvent(0, true);
+    SimulateFrame();
+
+    io.AddMousePosEvent(to_x, 50.0f);
+    SimulateFrame();
+
+    io.AddMouseButtonEvent(0, false);
+    SimulateFrame();
+  }
+};
+
+TEST_F(TimelineTimeRangeResizeTest, ResizeTimeRangeStart) {
+  AddSelectedTimeRange(100.0, 200.0);
+  ASSERT_EQ(timeline_.selected_time_ranges().size(), 1);
+
+  // Resize start from 100 to 50
+  Drag(100.0, 50.0);
+
+  ASSERT_EQ(timeline_.selected_time_ranges().size(), 1);
+  EXPECT_NEAR(timeline_.selected_time_ranges()[0].start(), 50.0, 1.0);
+  EXPECT_NEAR(timeline_.selected_time_ranges()[0].end(), 200.0, 1.0);
+}
+
+TEST_F(TimelineTimeRangeResizeTest, ResizeTimeRangeEnd) {
+  AddSelectedTimeRange(100.0, 200.0);
+
+  // Resize end from 200 to 300
+  Drag(200.0, 300.0);
+
+  ASSERT_EQ(timeline_.selected_time_ranges().size(), 1);
+  EXPECT_NEAR(timeline_.selected_time_ranges()[0].start(), 100.0, 1.0);
+  EXPECT_NEAR(timeline_.selected_time_ranges()[0].end(), 300.0, 1.0);
+}
+
+TEST_F(TimelineTimeRangeResizeTest, ResizeSwapsStartAndEnd) {
+  AddSelectedTimeRange(100.0, 200.0);
+
+  // Drag start (100) past end (200) to 300
+  Drag(100.0, 300.0);
+
+  ASSERT_EQ(timeline_.selected_time_ranges().size(), 1);
+  EXPECT_NEAR(timeline_.selected_time_ranges()[0].start(), 200.0, 1.0);
+  EXPECT_NEAR(timeline_.selected_time_ranges()[0].end(), 300.0, 1.0);
+}
+
 }  // namespace
 }  // namespace testing
 }  // namespace traceviewer
