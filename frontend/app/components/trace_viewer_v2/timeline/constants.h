@@ -114,6 +114,10 @@ inline constexpr int kThreadNestingLevel = 1;
 inline constexpr ImU32 kSelectedTimeRangeColor = 0xFFFFC9A1;
 inline constexpr Pixel kSelectedTimeRangeTextBottomPadding = 10.0f;
 inline constexpr Pixel kSelectedTimeRangeTextTopPadding = 5.0f;
+// Vivid magenta guide line drawn on the border a selection edge is snapped to,
+// mirroring the snap guides shown by Figma/Photoshop.
+inline constexpr ImU32 kSnapGuideColor = IM_COL32(255, 0, 128, 255);
+inline constexpr Pixel kSnapGuideThickness = 2.0f;
 // go/keep-sorted end
 
 // Close Button Constants
@@ -133,11 +137,11 @@ inline constexpr Pixel kSelectedTimeRangeArrowPadding = 4.0f;
 inline constexpr float kClickDistanceThresholdSquared = 25.0f;
 // Radius (in pixels) within which a dragged selection edge snaps onto a nearby
 // event or time-range border.
-inline constexpr float kSnapCaptureRadiusPx = 16.0f;
+inline constexpr float kSnapCaptureRadiusPx = 20.0f;
 // Larger radius (in pixels) the cursor must travel past a snapped border before
 // the edge breaks free. Making release > capture gives the sticky, magnetic
 // snapping feel (hysteresis) used by tools like Figma and Photoshop.
-inline constexpr float kSnapReleaseRadiusPx = 28.0f;
+inline constexpr float kSnapReleaseRadiusPx = 40.0f;
 // go/keep-sorted end
 
 // Zooming and Panning Constants

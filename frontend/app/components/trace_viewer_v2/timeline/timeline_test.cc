@@ -5819,13 +5819,14 @@ TEST_F(TimelineDragSelectionTest, DoesNotSnapOutsideThreshold) {
 
   ImGuiIO& io = ImGui::GetIO();
 
-  // Drag from 50.0us (500px) to 98.0us (980px).
-  // Distance from 98.0us to 100.0us is 2.0us (20px), which is > 16px threshold.
+  // Drag from 50.0us (500px) to 97.0us (970px).
+  // Distance from 97.0us to 100.0us is 3.0us (30px), which is beyond the 20px
+  // capture radius, so no snapping occurs.
   io.MousePos = ImVec2(GetTimelineStartX() + 500.0f, kEmptyAreaY);
   io.AddMouseButtonEvent(0, true);
   SimulateFrame();
 
-  io.MousePos = ImVec2(GetTimelineStartX() + 980.0f, kEmptyAreaY);
+  io.MousePos = ImVec2(GetTimelineStartX() + 970.0f, kEmptyAreaY);
   SimulateFrame();
 
   io.AddMouseButtonEvent(0, false);
@@ -5833,7 +5834,7 @@ TEST_F(TimelineDragSelectionTest, DoesNotSnapOutsideThreshold) {
 
   ASSERT_EQ(timeline_.selected_time_ranges().size(), 1);
   EXPECT_DOUBLE_EQ(timeline_.selected_time_ranges()[0].start(), 50.0);
-  EXPECT_DOUBLE_EQ(timeline_.selected_time_ranges()[0].end(), 98.0);
+  EXPECT_DOUBLE_EQ(timeline_.selected_time_ranges()[0].end(), 97.0);
 }
 
 TEST_F(TimelineDragSelectionTest, SnapSelectsClosestEdge) {
@@ -5882,7 +5883,7 @@ TEST_F(TimelineDragSelectionTest, SnapStaysStickyWithinReleaseRadius) {
   // Verifies the hysteresis ("magnetic") behavior: once an edge snaps onto a
   // border it stays pinned there until the cursor is dragged past the larger
   // release radius, even though it is already outside the capture radius.
-  // px_per_us is 10, so capture = 16px = 1.6us and release = 28px = 2.8us.
+  // px_per_us is 10, so capture = 20px = 2.0us and release = 40px = 4.0us.
   timeline_.set_snap_to_time_range_enabled(true);
 
   FlameChartTimelineData data;
@@ -5915,18 +5916,18 @@ TEST_F(TimelineDragSelectionTest, SnapStaysStickyWithinReleaseRadius) {
   ASSERT_TRUE(timeline_.current_selected_time_range().has_value());
   EXPECT_DOUBLE_EQ(timeline_.current_selected_time_range()->end(), 100.0);
 
-  // Drag back to 97.5us (975px): 25px from the border. That is past the 16px
-  // capture radius but still within the 28px release radius, so the edge stays
+  // Drag back to 97.0us (970px): 30px from the border. That is past the 20px
+  // capture radius but still within the 40px release radius, so the edge stays
   // glued to 100.0us.
-  io.MousePos = ImVec2(GetTimelineStartX() + 975.0f, kEmptyAreaY);
+  io.MousePos = ImVec2(GetTimelineStartX() + 970.0f, kEmptyAreaY);
   SimulateFrame();
   EXPECT_DOUBLE_EQ(timeline_.current_selected_time_range()->end(), 100.0);
 
-  // Drag to 96.5us (965px): 35px from the border, beyond the release radius, so
+  // Drag to 95.5us (955px): 45px from the border, beyond the release radius, so
   // the edge finally breaks free and follows the cursor.
-  io.MousePos = ImVec2(GetTimelineStartX() + 965.0f, kEmptyAreaY);
+  io.MousePos = ImVec2(GetTimelineStartX() + 955.0f, kEmptyAreaY);
   SimulateFrame();
-  EXPECT_DOUBLE_EQ(timeline_.current_selected_time_range()->end(), 96.5);
+  EXPECT_DOUBLE_EQ(timeline_.current_selected_time_range()->end(), 95.5);
 
   io.AddMouseButtonEvent(0, false);
   SimulateFrame();

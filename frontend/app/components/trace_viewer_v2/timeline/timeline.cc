@@ -2359,7 +2359,33 @@ void Timeline::DrawSelectedTimeRanges(Pixel timeline_width,
   if (current_selected_time_range_) {
     DrawSelectedTimeRange(*current_selected_time_range_, timeline_width,
                           px_per_time_unit_val, /*show_delete_button=*/false);
+    // Highlight the border(s) an edge is currently snapped to so the magnetic
+    // snap is visible, like the guides in Figma/Photoshop.
+    if (snapped_start_border_.has_value()) {
+      DrawSnapGuideLine(*snapped_start_border_, timeline_width,
+                        px_per_time_unit_val);
+    }
+    if (snapped_end_border_.has_value()) {
+      DrawSnapGuideLine(*snapped_end_border_, timeline_width,
+                        px_per_time_unit_val);
+    }
   }
+}
+
+void Timeline::DrawSnapGuideLine(Microseconds border_time, Pixel timeline_width,
+                                 double px_per_time_unit_val) {
+  const ImGuiViewport* viewport = ImGui::GetMainViewport();
+  const Pixel timeline_x_start = viewport->Pos.x + label_width_;
+  const Pixel x =
+      TimeToScreenX(border_time, timeline_x_start, px_per_time_unit_val);
+  // Only draw when the snapped border falls inside the visible timeline.
+  if (x < timeline_x_start || x > timeline_x_start + timeline_width) {
+    return;
+  }
+  const Pixel y_min = ruler_screen_y_ + kRulerHeight;
+  const Pixel y_max = viewport->Pos.y + viewport->Size.y;
+  ImGui::GetWindowDrawList()->AddLine(ImVec2(x, y_min), ImVec2(x, y_max),
+                                      kSnapGuideColor, kSnapGuideThickness);
 }
 
 bool Timeline::HandleKeyboard() {

@@ -457,6 +457,10 @@ class Timeline {
   void DrawSelectedTimeRanges(Pixel timeline_width,
                               double px_per_time_unit_val);
 
+  // Draws a vertical guide line at the border a selection edge is snapped to.
+  void DrawSnapGuideLine(Microseconds border_time, Pixel timeline_width,
+                         double px_per_time_unit_val);
+
   // Handles keyboard input for panning and zooming.
   // Returns true if any interaction occurred.
   bool HandleKeyboard();

@@ -25,7 +25,7 @@ const FEATURE_FLAGS = {
   'snap_to_time_range': {
     name: 'Snap to Time Range',
     description: 'Enable snapping to event boundaries and selected ranges.',
-    default: false,
+    default: true,
   },
 } as const;
 
