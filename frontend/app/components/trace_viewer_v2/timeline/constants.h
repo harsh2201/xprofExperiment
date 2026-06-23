@@ -131,6 +131,13 @@ inline constexpr Pixel kSelectedTimeRangeArrowPadding = 4.0f;
 // If the mouse moves more than 5 pixels (5*5=25) between mouse down and mouse
 // up, it's considered a drag, not a click.
 inline constexpr float kClickDistanceThresholdSquared = 25.0f;
+// Radius (in pixels) within which a dragged selection edge snaps onto a nearby
+// event or time-range border.
+inline constexpr float kSnapCaptureRadiusPx = 16.0f;
+// Larger radius (in pixels) the cursor must travel past a snapped border before
+// the edge breaks free. Making release > capture gives the sticky, magnetic
+// snapping feel (hysteresis) used by tools like Figma and Photoshop.
+inline constexpr float kSnapReleaseRadiusPx = 28.0f;
 // go/keep-sorted end
 
 // Zooming and Panning Constants

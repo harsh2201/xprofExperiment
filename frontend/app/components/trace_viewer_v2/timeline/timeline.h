@@ -588,6 +588,12 @@ class Timeline {
   Microseconds drag_start_time_ = 0.0;
   std::optional<TimeRange> current_selected_time_range_;
 
+  // Borders that the start/end edges of the active time-range selection are
+  // currently snapped ("glued") to. These drive the sticky hysteresis snapping
+  // in ApplySnapping and are reset when a drag begins and ends.
+  std::optional<Microseconds> snapped_start_border_;
+  std::optional<Microseconds> snapped_end_border_;
+
   // Initialize to true to prevent sending request in the initial load where
   // JS side is already fetching the data.
   bool is_incremental_loading_ = true;

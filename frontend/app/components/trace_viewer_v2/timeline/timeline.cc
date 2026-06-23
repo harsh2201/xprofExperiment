@@ -1100,43 +1100,64 @@ void Timeline::ApplySnapping(TimeRange& range) {
   const double px_per_time = px_per_time_unit();
   if (px_per_time <= 0) return;
 
-  const Microseconds threshold = 16.0 / px_per_time;
+  // Convert the pixel radii to time so the snap "feel" stays constant across
+  // zoom levels. `capture` engages the snap; the larger `release` is how far
+  // the cursor must be dragged past a snapped border before the edge lets go.
+  const Microseconds capture_threshold = kSnapCaptureRadiusPx / px_per_time;
+  const Microseconds release_threshold = kSnapReleaseRadiusPx / px_per_time;
+
   const Microseconds original_duration = visible_range_.target().duration();
   const bool is_pan = std::abs(range.duration() - original_duration) < 1e-6;
 
-  Microseconds best_diff_start = threshold;
-  Microseconds best_diff_end = threshold;
-  Microseconds snapped_start_time = range.start();
-  Microseconds snapped_end_time = range.end();
-  bool snapped_start = false;
-  bool snapped_end = false;
+  // Finds the nearest snap border (a selected-range edge or a visible event
+  // edge) within `threshold` of `time`, or nullopt if none is close enough.
+  auto find_nearest_border =
+      [&](Microseconds time,
+          Microseconds threshold) -> std::optional<Microseconds> {
+    Microseconds best_diff = threshold;
+    Microseconds snapped_time = time;
+    bool snapped = false;
+    for (const auto& sel_range : selected_time_ranges_) {
+      ApplySnappingToEdge(time, threshold, {sel_range.start(), sel_range.end()},
+                          best_diff, snapped_time, snapped);
+    }
+    FindNearestEventEdge(time, threshold, best_diff, snapped_time, snapped);
+    if (snapped) return snapped_time;
+    return std::nullopt;
+  };
 
-  // 1. Check selected time ranges
-  for (const auto& sel_range : selected_time_ranges_) {
-    ApplySnappingToEdge(range.start(), threshold,
-                        {sel_range.start(), sel_range.end()}, best_diff_start,
-                        snapped_start_time, snapped_start);
-    ApplySnappingToEdge(range.end(), threshold,
-                        {sel_range.start(), sel_range.end()}, best_diff_end,
-                        snapped_end_time, snapped_end);
-  }
+  // Resolves a single edge against the borders, applying hysteresis: while an
+  // edge is glued to a border it stays pinned there until the raw cursor time
+  // moves beyond `release_threshold`, at which point it breaks free and is free
+  // to capture another border within `capture_threshold`.
+  auto resolve_edge =
+      [&](Microseconds raw_time,
+          std::optional<Microseconds>& glued_border) -> Microseconds {
+    if (glued_border.has_value()) {
+      if (std::abs(raw_time - *glued_border) <= release_threshold) {
+        return *glued_border;
+      }
+      glued_border.reset();
+    }
+    if (auto border = find_nearest_border(raw_time, capture_threshold)) {
+      glued_border = border;
+      return *border;
+    }
+    return raw_time;
+  };
 
-  // 2. Check all visible events
-  FindNearestEventEdge(range.start(), threshold, best_diff_start,
-                       snapped_start_time, snapped_start);
-  FindNearestEventEdge(range.end(), threshold, best_diff_end, snapped_end_time,
-                       snapped_end);
+  const Microseconds final_start =
+      resolve_edge(range.start(), snapped_start_border_);
+  const Microseconds final_end =
+      resolve_edge(range.end(), snapped_end_border_);
 
   if (is_pan) {
-    if (snapped_start) {
-      range = {snapped_start_time, snapped_start_time + original_duration};
-    } else if (snapped_end) {
-      range = {snapped_end_time - original_duration, snapped_end_time};
+    if (snapped_start_border_.has_value()) {
+      range = {final_start, final_start + original_duration};
+    } else if (snapped_end_border_.has_value()) {
+      range = {final_end - original_duration, final_end};
     }
   } else {
-    Microseconds final_start =
-        snapped_start ? snapped_start_time : range.start();
-    Microseconds final_end = snapped_end ? snapped_end_time : range.end();
     range = TimeRange(std::min(final_start, final_end),
                       std::max(final_start, final_end));
   }
@@ -2389,6 +2410,8 @@ bool Timeline::HandleKeyboard() {
       is_selecting_ = false;
       is_dragging_ = false;
       current_selected_time_range_.reset();
+      snapped_start_border_.reset();
+      snapped_end_border_.reset();
     }
   }
 
@@ -2587,6 +2610,8 @@ void Timeline::HandleMouseDown(Pixel timeline_origin_x) {
             PixelToTime(io.MousePos.x - timeline_origin_x, px_per_time);
         current_selected_time_range_ =
             TimeRange(drag_start_time_, drag_start_time_);
+        snapped_start_border_.reset();
+        snapped_end_border_.reset();
       }
     }
   }
@@ -2679,6 +2704,8 @@ void Timeline::HandleMouseRelease() {
     selection_end_pos_.reset();
     current_selected_time_range_.reset();
     selection_start_pos_ = std::nullopt;
+    snapped_start_border_.reset();
+    snapped_end_border_.reset();
   }
 }
 
